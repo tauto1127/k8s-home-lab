@@ -19,5 +19,7 @@ spec:
           mountPath: /mnt/md0
   volumes:
     - name: nfs-volume
-      persistentVolumeClaim:
-        claimName: my-pvc
+      nfs:
+          server: 192.168.11.9
+          # directory location on nfs
+          path: "/mnt/md0" 
