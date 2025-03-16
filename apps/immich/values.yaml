@@ -5,9 +5,9 @@
 # These entries are shared between all the Immich components
 
 env:
-  REDIS_HOSTNAME: '10.111.11.46'
+  REDIS_HOSTNAME: '10.103.212.90:30321'
 # {{ printf "%s-redis-master" .Release.Name }}
-  DB_HOSTNAME: "192.168.11.28:30300"
+  DB_HOSTNAME: "10.96.14.156:30300"
   DB_USERNAME: "immich"
   DB_DATABASE_NAME: "immich"
   # -- You should provide your own secret outside of this helm-chart and use `postgresql.global.postgresql.auth.existingSecret` to provide credentials to the postgresql instance
