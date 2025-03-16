@@ -46,7 +46,7 @@ metadata:
 spec:
   type: NodePort
   ports:
-    - port: 5432
+    - port: 6379
       nodePort: 30321
   selector:
     app: redis-deployment
