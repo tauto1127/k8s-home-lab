@@ -1,0 +1,3 @@
+Requirements
+- nfs-common
+- gcloud(master-node)
