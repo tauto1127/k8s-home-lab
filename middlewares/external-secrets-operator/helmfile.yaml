@@ -1,0 +1,9 @@
+repositories:
+  - name: secrets-store-csi-driver
+    url: https://kubernetes-sigs.github.io/secrets-store-csi-driver/charts
+
+releases:
+  - name: csi-secrets-store
+    namespace: kube-system
+    chart: secrets-store-csi-driver/secrets-store-csi-driver
+    version: 1.4.8
