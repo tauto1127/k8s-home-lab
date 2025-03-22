@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  namespace: dawarich
+  labels:
+    io.kompose.service: dawarich-db-data
+  name: dawarich-db-data
+spec:
+  storageClassName: ""     
+  volumeName: dawarich-db-pv
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 600Mi
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: dawarich-db-pv
+  namespace: dawarich
+spec:
+  capacity:
+    storage: 600Mi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  nfs:
+    path: /mnt/md0/apps/dawarich/db/
+    server: 192.168.11.9
