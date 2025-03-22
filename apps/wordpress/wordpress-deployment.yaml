@@ -44,11 +44,6 @@ spec:
                       - name: WORDPRESS_DB_PASSWORD
                         valueFrom:
                             secretKeyRef:
-                                name: wordpress-secrets
-                                key: password
-                      - name: WORDPRESS_DB_PASSWORD2
-                        valueFrom:
-                            secretKeyRef:
                                 name: wordpress-external-secrets
                                 key: wordpress-external-secrets
 
