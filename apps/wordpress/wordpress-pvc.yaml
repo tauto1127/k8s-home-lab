@@ -21,8 +21,8 @@ metadata:
   name: wordpress-pvc
   namespace: wordpress
 spec:
-  storageClassName: ""     
-  volumeName: wordpress-pv 
+  storageClassName: ""
+  volumeName: wordpress-pv
   accessModes:
     - ReadWriteMany
   resources:
