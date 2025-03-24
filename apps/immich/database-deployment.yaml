@@ -1,0 +1,86 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: immich-mysql
+  namespace: immich
+spec:
+  ports:
+    - port: 3306
+  selector:
+    io.kompose.service: database
+  clusterIP: None
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: kompose convert -f /home/takuto1127/k8s-home-lab/apps/immich/docker-compose.yml
+    kompose.version: 1.35.0 (9532ceef3)
+  labels:
+    io.kompose.service: database
+  name: database
+  namespace: immich
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: database
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: kompose convert -f /home/takuto1127/k8s-home-lab/apps/immich/docker-compose.yml
+        kompose.version: 1.35.0 (9532ceef3)
+      labels:
+        io.kompose.service: database
+    spec:
+      containers:
+        - args:
+            - postgres
+            - -c
+            - shared_preload_libraries=vectors.so
+            - -c
+            - search_path="$(user)", public, vectors
+            - -c
+            - logging_collector=on
+            - -c
+            - max_wal_size=2GB
+            - -c
+            - shared_buffers=512MB
+            - -c
+            - wal_compression=on
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  key: DB_DATABASE_NAME
+                  name: env
+            - name: POSTGRES_INITDB_ARGS
+              value: --data-checksums
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: immich-external-secrets
+                  key: immich-db-password
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  key: DB_USERNAME
+                  name: env
+          image: docker.io/tensorchord/pgvecto-rs:pg14-v0.2.0@sha256:739cdd626151ff1f796dc95a6591b55a714f341c737e27f045019ceabf8e8c52
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready --dbname="${POSTGRES_DB}" --username="${POSTGRES_USER}" || exit 1; Chksum="$(psql --dbname="${POSTGRES_DB}" --username="${POSTGRES_USER}" --tuples-only --no-align --command='SELECT COALESCE(SUM(checksum_failures), 0) FROM pg_stat_database')"; echo "checksum failure count is $Chksum"; [ "$Chksum" = '0' ] || exit 1
+            initialDelaySeconds: 300
+            periodSeconds: 300
+          name: immich-postgres
+          volumeMounts:
+            - mountPath: /var/lib/postgresql/data
+              name: database-claim0
+      restartPolicy: Always
+      volumes:
+        - name: database-claim0
+          persistentVolumeClaim:
+            claimName: database-claim0

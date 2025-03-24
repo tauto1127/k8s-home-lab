@@ -1,0 +1,28 @@
+# docker run -it -v "$(pwd)":/import:ro -e IMMICH_INSTANCE_URL=https://your-immich-instance/api -e IMMICH_API_KEY=your-api-key ghcr.io/immich-app/immich-cli:latest
+apiVersion: v1
+kind: Pod
+metadata:
+  name: inspector-pod
+  namespace: immich
+spec:
+  containers:
+    - name: alpine
+      image: node:23-alpine3.20
+      command:
+        - sh
+        - -c
+        - "ls -al /mnt/md0 && tail -f /dev/null"
+      env:
+        - name: IMMICH_INSTANCE_URL
+          value: http://192.168.11.203:2283/api
+        - name: IMMICH_API_KEY
+          value: 4TeYxCOQMFVJKwrCWEuCTmt045Lbo8dZDxERqb3M
+      volumeMounts:
+        - name: nfs-volume
+          mountPath: /mnt/md0
+  volumes:
+    - name: nfs-volume
+      nfs:
+          server: 192.168.11.9
+          # directory location on nfs
+          path: "/mnt/md0" 

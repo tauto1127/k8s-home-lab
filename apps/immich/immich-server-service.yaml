@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    kompose.cmd: kompose convert -f /home/takuto1127/k8s-home-lab/apps/immich/docker-compose.yml
+    kompose.version: 1.35.0 (9532ceef3)
+    metallb.universe.tf/loadBalancerIPs: 192.168.11.203
+  labels:
+    io.kompose.service: immich-server
+  name: immich-server
+  namespace: immich
+spec:
+  type: LoadBalancer
+  ports:
+    - name: "2283"
+      port: 2283
+      targetPort: 2283
+  selector:
+    io.kompose.service: immich-server

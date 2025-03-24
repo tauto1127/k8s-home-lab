@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: immich-redis
+  namespace: immich
+spec:
+  ports:
+    - port: 6379
+  selector:
+    io.kompose.service: redis
+  clusterIP: None
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: kompose convert -f /home/takuto1127/k8s-home-lab/apps/immich/docker-compose.yml
+    kompose.version: 1.35.0 (9532ceef3)
+  labels:
+    io.kompose.service: redis
+  name: redis
+  namespace: immich
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: redis
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: kompose convert -f /home/takuto1127/k8s-home-lab/apps/immich/docker-compose.yml
+        kompose.version: 1.35.0 (9532ceef3)
+      labels:
+        io.kompose.service: redis
+    spec:
+      containers:
+        - image: docker.io/redis:6.2-alpine@sha256:148bb5411c184abd288d9aaed139c98123eeb8824c5d3fce03cf721db58066d8
+          livenessProbe:
+            exec:
+              command:
+                - redis-cli ping || exit 1
+          name: immich-redis
+      restartPolicy: Always
