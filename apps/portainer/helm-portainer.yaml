@@ -1,0 +1,16 @@
+repositories:
+  - name: portainer
+    url: https://portainer.github.io/k8s/
+
+releases:
+  - name: portainer
+    namespace: portainer
+    createNamespace: true
+    chart: portainer/portainer
+    values:
+      - service:
+          type: LoadBalancer
+          annotations:
+            metallb.universe.tf/loadBalancerIPs: 192.168.11.204
+      - persistence:
+          existingClaim: portainer-pvc
