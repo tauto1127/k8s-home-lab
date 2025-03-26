@@ -17,9 +17,15 @@ spec:
       volumeMounts:
         - name: nfs-volume
           mountPath: /mnt/md0
+        - name: ssd-nfs-volume
+          mountPath: /mnt/ssd
   volumes:
     - name: nfs-volume
       nfs:
           server: 192.168.11.9
           # directory location on nfs
           path: "/mnt/md0" 
+    - name: ssd-nfs-volume
+      nfs:
+          server: 192.168.11.13
+          path: "/srv/nfs4"
