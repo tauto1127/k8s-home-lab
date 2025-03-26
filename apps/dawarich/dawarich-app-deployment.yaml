@@ -1,113 +1,5 @@
-# apiVersion: apps/v1
-# kind: Deployment
-# metadata:
-#   namespace: dawarich
-#   annotations:
-#     kompose.cmd: kompose convert -f docker-compose.yaml
-#     kompose.version: 1.35.0 (9532ceef3)
-#   labels:
-#     io.kompose.service: dawarich-app
-#   name: dawarich-app
-# spec:
-#   replicas: 1 # You can adjust the number of replicas as needed
-#   selector:
-#     matchLabels:
-#       io.kompose.service: dawarich-app
-#   template:
-#     metadata:
-#       annotations:
-#         kompose.cmd: kompose convert -f docker-compose.yaml
-#         kompose.version: 1.35.0 (9532ceef3)
-#       labels:
-#         io.kompose.service: dawarich-app
-#     spec:
-#       containers:
-#         - args:
-#             - bin/rails
-#             - server
-#             - -p
-#             - "3000"
-#             - -b
-#             - '::'
-#           command:
-#             - web-entrypoint.sh
-#           env:
-#             - name: APPLICATION_HOSTS
-#               value: localhost
-#             - name: APPLICATION_PROTOCOL
-#               value: http
-#             - name: DATABASE_HOST
-#               value: dawarich-db
-#             - name: DATABASE_NAME
-#               value: dawarich_development
-#             - name: DATABASE_PASSWORD
-#               valueFrom:
-#                 secretKeyRef:
-#                   name: dawarich-secrets
-#                   key: password
-#             - name: DATABASE_USERNAME
-#               value: postgres
-#             - name: DISTANCE_UNIT
-#               value: km
-#             - name: ENABLE_TELEMETRY
-#               value: "false"
-#             - name: MIN_MINUTES_SPENT_IN_CITY
-#               value: "60"
-#             - name: PROMETHEUS_EXPORTER_ENABLED
-#               value: "false"
-#             - name: PROMETHEUS_EXPORTER_HOST
-#               value: 0.0.0.0
-#             - name: PROMETHEUS_EXPORTER_PORT
-#               value: "9394"
-#             - name: RAILS_ENV
-#               value: development
-#             - name: REDIS_URL
-#               value: redis://dawarich_redis:6379/0
-#             - name: TIME_ZONE
-#               value: Asia/Tokyo
-#           image: freikin/dawarich:0.25.1
-#           # livenessProbe:
-#           #   exec:
-#           #     command:
-#           #       - wget
-#           #       - -qO
-#           #       - -
-#           #       - http://127.0.0.1:3000/api/v1/health
-#           #       - |
-#           #       - grep
-#           #       - -q
-#           #       - '"status"\s*:\s*"ok"'
-#             failureThreshold: 30
-#             initialDelaySeconds: 30
-#             periodSeconds: 10
-#             timeoutSeconds: 10
-#           name: dawarich-app
-#           ports:
-#             - containerPort: 3000
-#               protocol: TCP
-#           resources:
-#             limits:
-#               cpu: 500m
-#               memory: "4294967296"
-#           stdin: true
-#           tty: true
-#           volumeMounts:
-#             - mountPath: /var/app/public
-#               name: dawarich-public
-#             - mountPath: /var/app/tmp/imports/watched
-#               name: dawarich-watched
-#       restartPolicy: Always # Changed from OnFailure to Always for Deployment
-#       volumes:
-#         - name: dawarich-public
-#           persistentVolumeClaim:
-#             claimName: dawarich-public
-#         - name: dawarich-watched
-#           persistentVolumeClaim:
-#             claimName: dawarich-watched
-
-# # ---
-apiVersion: v1
-kind: Pod
+apiVersion: apps/v1
+kind: Deployment
 metadata:
   namespace: dawarich
   annotations:
@@ -117,79 +9,88 @@ metadata:
     io.kompose.service: dawarich-app
   name: dawarich-app
 spec:
-  containers:
-    - args:
-        - bin/rails
-        - server
-        - -p
-        - "3000"
-        - -b
-        - "::"
-      command:
-        - web-entrypoint.sh
-      env:
-        - name: APPLICATION_HOSTS
-          value: location.takutk.shop
-        - name: APPLICATION_PROTOCOL
-          value: https
-        - name: DATABASE_HOST
-          value: dawarich-db
-        - name: DATABASE_NAME
-          value: dawarich_development
-        - name: DATABASE_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: dawarich-secrets
-              key: dawarich-db-password
-        - name: DATABASE_USERNAME
-          value: postgres
-        - name: DISTANCE_UNIT
-          value: km
-        - name: ENABLE_TELEMETRY
-          value: "false"
-        - name: MIN_MINUTES_SPENT_IN_CITY
-          value: "60"
-        - name: PROMETHEUS_EXPORTER_ENABLED
-          value: "false"
-        - name: PROMETHEUS_EXPORTER_HOST
-          value: 0.0.0.0
-        - name: PROMETHEUS_EXPORTER_PORT
-          value: "9394"
-        - name: RAILS_ENV
-          value: development
-        - name: REDIS_URL
-          value: redis://dawarich-redis:6379/0
-        - name: TIME_ZONE
-          value: Asia/Tokyo
-      image: freikin/dawarich:0.25.1
-      livenessProbe:
-        exec:
+  selector:
+    matchLabels:
+      io.kompose.service: dawarich-app
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        io.kompose.service: dawarich-app
+    spec:
+      containers:
+        - args:
+            - bin/rails
+            - server
+            - -p
+            - "3000"
+            - -b
+            - "::"
           command:
-            - wget -qO - http://127.0.0.1:3000/api/v1/health | grep -q '"status"\s*:\s*"ok"'
-        failureThreshold: 30
-        initialDelaySeconds: 30
-        periodSeconds: 10
-        timeoutSeconds: 10
-      name: dawarich-app
-      ports:
-        - containerPort: 3000
-          protocol: TCP
-      resources:
-        limits:
-          cpu: 500m
-          memory: "4294967296"
-      stdin: true
-      tty: true
-      volumeMounts:
-        - mountPath: /var/app/public
-          name: dawarich-public
-        - mountPath: /var/app/tmp/imports/watched
-          name: dawarich-watched
-  restartPolicy: OnFailure
-  volumes:
-    - name: dawarich-public
-      persistentVolumeClaim:
-        claimName: dawarich-public
-    - name: dawarich-watched
-      persistentVolumeClaim:
-        claimName: dawarich-watched
+            - web-entrypoint.sh
+          env:
+            - name: APPLICATION_HOSTS
+              value: location.takutk.shop
+            - name: APPLICATION_PROTOCOL
+              value: https
+            - name: DATABASE_HOST
+              value: dawarich-db
+            - name: DATABASE_NAME
+              value: dawarich_development
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dawarich-secrets
+                  key: dawarich-db-password
+            - name: DATABASE_USERNAME
+              value: postgres
+            - name: DISTANCE_UNIT
+              value: km
+            - name: ENABLE_TELEMETRY
+              value: "false"
+            - name: MIN_MINUTES_SPENT_IN_CITY
+              value: "60"
+            - name: PROMETHEUS_EXPORTER_ENABLED
+              value: "false"
+            - name: PROMETHEUS_EXPORTER_HOST
+              value: 0.0.0.0
+            - name: PROMETHEUS_EXPORTER_PORT
+              value: "9394"
+            - name: RAILS_ENV
+              value: development
+            - name: REDIS_URL
+              value: redis://dawarich-redis:6379/0
+            - name: TIME_ZONE
+              value: Asia/Tokyo
+          image: freikin/dawarich:0.25.1
+          livenessProbe:
+            exec:
+              command:
+                - wget -qO - http://127.0.0.1:3000/api/v1/health | grep -q '"status"\s*:\s*"ok"'
+            failureThreshold: 30
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 10
+          name: dawarich-app
+          ports:
+            - containerPort: 3000
+              protocol: TCP
+          resources:
+            limits:
+              cpu: 500m
+              memory: "4294967296"
+          stdin: true
+          tty: true
+          volumeMounts:
+            - mountPath: /var/app/public
+              name: dawarich-public
+            - mountPath: /var/app/tmp/imports/watched
+              name: dawarich-watched
+      restartPolicy: Always
+      volumes:
+        - name: dawarich-public
+          persistentVolumeClaim:
+            claimName: dawarich-public
+        - name: dawarich-watched
+          persistentVolumeClaim:
+            claimName: dawarich-watched

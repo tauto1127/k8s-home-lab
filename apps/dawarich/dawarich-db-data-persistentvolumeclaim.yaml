@@ -12,7 +12,7 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 600Mi
+      storage: 2Gi
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -21,7 +21,7 @@ metadata:
   namespace: dawarich
 spec:
   capacity:
-    storage: 600Mi
+    storage: 2Gi
   accessModes:
     - ReadWriteOnce
   persistentVolumeReclaimPolicy: Retain
