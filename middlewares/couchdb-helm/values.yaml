@@ -77,7 +77,7 @@ persistentVolume:
   # existingClaims:
   #   - name: couchdb-pvc
   #     volumeName: couchdb-pv
-  existingClaims: null
+  existingClaims: 
   # existingClaims: 
   # - name: couchdb-pvc
   #   volumeName: couchdb-pv
