@@ -24398,8 +24398,10 @@ metadata:
     app.kubernetes.io/component: server
     app.kubernetes.io/name: argocd-server
     app.kubernetes.io/part-of: argocd
+    metallb.universe.tf/loadBalancerIPs: 192.168.11.200
   name: argocd-server
 spec:
+  type: LoadBalancer
   ports:
   - name: http
     port: 80
