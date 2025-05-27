@@ -1,0 +1,36 @@
+# helmfile.yaml
+repositories:
+  - name: nfs-subdir-external-provisioner
+    url: https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner/
+
+releases:
+  - name: nfs-subdir-external-provisioner
+    namespace: nfs-provisioner #
+    chart: nfs-subdir-external-provisioner/nfs-subdir-external-provisioner
+    version: "4.0.18" # 2024年5月時点の最新版ですが、適宜更新してください。
+    createNamespace: true
+    values:
+      - nfs:
+          server: 192.168.11.9 #
+          path: /mnt/md0       #
+          # volumeName: nfs-client-root # patch_nfs_details.yaml の volumes.name と一致させる (デフォルトで同じはず)
+          # mountOptions: # 必要に応じて設定
+      - storageClass:
+          create: true
+          name: nfs-client #
+          # provisionerName: k8s-sigs.io/nfs-subdir-external-provisioner # デフォルト値と同じ
+          defaultClass: false # 必要に応じて true に設定
+          archiveOnDelete: false #
+          # accessModes: ReadWriteOnce # デフォルト値と同じはず
+          # allowVolumeExpansion: true # デフォルト値と同じはず
+          # parameters: # class.yaml の parameters に対応
+
+# 補足:
+# - `kustomization.yaml` の `bases` で指定されていた `github.com/kubernetes-sigs/nfs-subdir-external-provisioner//deploy` は、
+#   Helm Chart のリソース定義に相当します。
+# - `namespace.yaml` の内容は `releases.namespace` と `createNamespace: true` で実現しています。
+# - `patch_nfs_details.yaml` の `spec.template.spec.containers[0].env` と `spec.template.spec.volumes` の内容は、
+#   Helm Chart の `values.yaml` の `nfs` セクションで設定可能です。
+# - `class.yaml` の内容は Helm Chart の `values.yaml` の `storageClass` セクションで設定可能です。
+# - Helm Chart のバージョン (`version`) は、必要に応じて固定または更新してください。
+#   https://github.com/kubernetes-sigs/nfs-subdir-external-provisioner/pkgs/helm/nfs-subdir-external-provisioner で最新バージョンを確認できます。
