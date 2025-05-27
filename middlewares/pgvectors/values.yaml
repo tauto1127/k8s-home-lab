@@ -1,7 +1,0 @@
-primary:
-  persistence:
-    storageClass: "nfs-client"
-    size: 8Gi
-    accessModes:
-      - ReadWriteOnce
-    annotations: {}
