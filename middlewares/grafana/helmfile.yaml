@@ -22,20 +22,16 @@ releases:
             auth:
               type: basic
               username: "2342949"
-              # 本番環境では、パスワードを直接記述する代わりに、Helmfileのシークレット管理機能 (例: SOPS) や
-              # Kubernetes Secret を参照することを強く推奨します。
-              passwordRef:
-                name: grafana-external-secrets
-                key: grafana-external-secret
+              passwordFrom: "grafana-external-secrets"
+              passwordKey: "grafana"
           - name: grafana-cloud-logs
             type: loki
             url: https://logs-prod-030.grafana.net./loki/api/v1/push
             auth:
               type: basic
               username: "1167152"
-              passwordRef:
-                name: grafana-external-secrets
-                key: grafana-external-secret
+              passwordFrom: "grafana-external-secrets"
+              passwordKey: "grafana"
           - name: grafana-cloud-otlp-endpoint
             type: otlp
             url: https://otlp-gateway-prod-ap-northeast-0.grafana.net./otlp
@@ -43,9 +39,8 @@ releases:
             auth:
               type: basic
               username: "1209355"
-              passwordRef:
-                name: grafana-external-secrets
-                key: grafana-external-secret
+              passwordFrom: "grafana-external-secrets"
+              passwordKey: "grafana"
             metrics:
               enabled: true
             logs:
@@ -99,9 +94,8 @@ releases:
               auth:
                 type: basic
                 username: "1209355"
-                passwordRef:
-                  name: grafana-external-secrets
-                  key: grafana-external-secret
+                passwordFrom: "grafana-external-secrets"
+                passwordKey: "grafana"
         alloy-singleton:
           enabled: true
           alloy:
@@ -129,9 +123,8 @@ releases:
               auth:
                 type: basic
                 username: "1209355"
-                passwordRef:
-                  name: grafana-external-secrets
-                  key: grafana-external-secret
+                passwordFrom: "grafana-external-secrets"
+                passwordKey: "grafana"
         alloy-logs:
           enabled: true
           alloy:
@@ -163,9 +156,8 @@ releases:
               auth:
                 type: basic
                 username: "1209355"
-                passwordRef:
-                  name: grafana-external-secrets
-                  key: grafana-external-secret
+                passwordFrom: "grafana-external-secrets"
+                passwordKey: "grafana"
         alloy-receiver:
           enabled: true
           alloy:
@@ -210,6 +202,5 @@ releases:
               auth:
                 type: basic
                 username: "1209355"
-                passwordRef:
-                  name: grafana-external-secrets
-                  key: grafana-external-secret
+                passwordFrom: "grafana-external-secrets"
+                passwordKey: "grafana"
