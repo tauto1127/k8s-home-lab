@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: automatisch-pv
+  namespace: automatisch
+  labels:
+    app: automatisch
+spec:
+  capacity:
+    storage: 6Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  nfs:
+    path: /mnt/md0/apps/automatisch
+    server: 192.168.11.9
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    app: automatisch
+    io.kompose.service: automatisch-storage
+  name: automatisch-storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
+  volumeName: automatisch-pv
+  storageClassName: ""
