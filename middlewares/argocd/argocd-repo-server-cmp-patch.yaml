@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argocd-repo-server
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-repo-server
+  template:
+    spec:
+      volumes:
+        # 既存のボリューム定義に加えて、ConfigMap用のボリュームを追加
+        - name: helmfile-plugin-config # ボリューム名 (任意)
+          configMap:
+            name: cmp-helmfile # 手順1でkustomization.yamlに追加したConfigMap名
+        # 既存の plugins ボリュームは install.yaml で定義されていますが、
+        # CMPサーバーが書き込み可能なtmp領域を必要とする場合があるのでemptyDirも追加しておくと良いでしょう。
+        # install.yaml 内に既に tmp ボリュームがあるので、それを利用するか、
+        # サイドカー専用のtmpが必要であれば別途定義します。
+        # ここでは既存の var-files や tmp を CMP サイドカーも利用できると仮定するか、
+        # もしCMPサーバーが /tmp に書き込むなら、そのマウントも追加します。
+        # install.yaml には既に tmp という emptyDir が定義されているので、それを共有できます。
+        # - name: cmp-tmp # 例: CMPサーバー用のtmpが必要な場合
+        #   emptyDir: {}
+      containers:
+        # 既存の argocd-repo-server コンテナの定義はそのまま
+        # - name: argocd-repo-server
+        #   ...
+
+        # CMP用のサイドカーコンテナを追加
+        - name: cmp-helmfile # サイドカーコンテナ名 (任意)
+          image: quay.io/argoproj/argocd:v2.14.12 # install.yamlで使われているArgo CDのバージョンに合わせる
+          command:
+            - /var/run/argocd/argocd-cmp-server # initContainersでコピーされるパス
+          env:
+            - name: ARGOCD_EXEC_TIMEOUT # 必要に応じてタイムアウト設定
+              value: "90s"
+            # 他に必要な環境変数があれば追加
+          securityContext: # Argo CDの他のコンテナに倣って設定
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            # runAsUser: 999 # Argo CDのドキュメントで推奨されるユーザーID
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: helmfile-plugin-config # 上で定義したConfigMapボリューム名
+              mountPath: /home/argocd/cmp-server/config/plugin.yaml # CMPがplugin.yamlを期待するパス
+              subPath: plugin.yaml # ConfigMap内のキー名
+            - name: var-files # install.yamlで定義されているinitContainerが書き出すパス
+              mountPath: /var/run/argocd
+            - name: tmp # install.yamlで定義されているtmpボリューム
+              mountPath: /tmp
+            # プラグインが動作するワーキングディレクトリとして /plugins をマウントすることが推奨される場合がある
+            - name: plugins # install.yamlで定義されているpluginsボリューム
+              mountPath: /plugins
+            # もしプラグインがリポジトリの内容にアクセスする必要がある場合 (通常はArgo CDがよしなにやってくれる)
+            # - name: argocd-repo-server # メインコンテナが使うリポジトリのマウントポイントを共有する必要があるか確認
+            #   mountPath: /path/to/repo/content
+
+      # initContainers の定義は install.yaml のものをそのまま利用
+      # initContainers:
+      #   - name: copyutil
+      #     ...

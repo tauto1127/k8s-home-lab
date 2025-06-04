@@ -4,7 +4,10 @@ kind: Kustomization
 namespace: argocd
 resources:
   - install.yaml
+  - cmp/cmp-helmfile.yaml
 
+patchesStrategicMerge:
+  - argocd-repo-server-cmp-patch.yaml
 patches:
   - patch: |-
       - op: replace
