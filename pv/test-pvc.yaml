@@ -4,6 +4,7 @@ metadata:
   name: test-pvc
 spec:
   accessModes:
+    # ここは絶対ReadWriteOnce
     - ReadWriteOnce
   resources:
     requests:
