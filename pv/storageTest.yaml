@@ -19,6 +19,8 @@ spec:
           mountPath: /mnt/md0
         - name: ssd-nfs-volume
           mountPath: /mnt/ssd
+        - name: provisioner-volume
+          mountPath: /mnt/provisioner
   volumes:
     - name: nfs-volume
       nfs:
@@ -29,3 +31,6 @@ spec:
       nfs:
           server: 192.168.11.13
           path: "/srv/nfs4"
+    - name: provisioner-volume
+      persistentVolumeClaim:
+        claimName: test-pvc
