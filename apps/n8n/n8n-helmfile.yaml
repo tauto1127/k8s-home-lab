@@ -1,0 +1,64 @@
+helmDefaults:
+  wait: true
+  timeout: 66
+
+repositories:
+  - name: 8gears
+    url: 8gears.container-registry.com/library
+    oci: true
+
+releases:
+  - name: n8n
+    namespace: n8n
+    createNamespace: true
+    chart: 8gears/n8n
+    version: 1.0.7
+    values:
+      - namespace: n8n
+      - main:
+        # mainのserviceを設定
+          service:
+            type: LoadBalancer
+            annotations:
+              metallb.universe.tf/loadBalancerIPs: 192.168.11.207
+          persistence:
+            enabled: true
+            type: existing
+            existingClaim: n8n-pvc
+          # extraEnv: &extraEnv
+          #   - DB_POSTGRESDB_PASSWORD:
+          #     valueFrom:
+          #       secretKeyRef:
+          #         name: n8n-db-password
+          #         key: password
+      # - webhook:
+      #     enabled: true
+      #     persistence:
+      #       enabled: true
+      #       type: dynamic
+      #       storageClass: nfs-client
+      - ingress:
+          enabled: true
+          hosts:
+            - host: n8n.takutk.com
+              paths:
+                - /
+      - extraManifests:
+          - apiVersion: external-secrets.io/v1beta1
+            kind: ExternalSecret
+            metadata:
+              name: n8n-external-secrets
+              namespace: n8n
+            spec:
+              secretStoreRef:
+                name: secret-store-provider
+                kind: ClusterSecretStore # or ClusterSecretStore
+              target:
+                name: immich-external-secrets
+                deletionPolicy: Retain
+              data:
+                - secretKey: n8n-db-password
+                  remoteRef:
+                    key: n8n-db-password
+                    version: "latest"
+                    decodingStrategy: None # can be None, Base64, Base64URL or Auto
