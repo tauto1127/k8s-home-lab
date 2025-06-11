@@ -21,7 +21,7 @@ releases:
       #     defaultClass: false # 必要に応じて true に設定
       #     archiveOnDelete: false #
           # accessModes: ReadWriteOnce # デフォルト値と同じはず
-          pathPattern: "${.PVC.name}"
+          pathPattern: "apps/${.PVC.namespace}/${.PVC.name}"
           archiveOnDelete: false
       #     # allowVolumeExpansion: true # デフォルト値と同じはず
       #     # parameters: # class.yaml の parameters に対応
