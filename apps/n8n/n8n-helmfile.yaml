@@ -77,22 +77,54 @@ releases:
               value: *url
             - name: EXECUTIONS_MODE
               value: "queue"
+            - name: N8N_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: n8n-key
+                  key: n8n-key
+      - worker:
+          enabled: true
+          persistence:
+            enabled: true
+            type: existing
+            existingClaim: n8n-worker-pvc
+          resources:
+            limits:
+              cpu: 500m
+              memory: 1Gi
+              ephemeral-storage: 1Gi
+            requests:
+              cpu: 250m
+              memory: 512Mi
+              ephemeral-storage: 500Mi
+          tolerations:
+            - key: "node.kubernetes.io/disk-pressure"
+              operator: "Exists"
+              effect: "NoSchedule"
+          extraEnv:
+            - name: EXECUTIONS_MODE
+              value: "queue"
+            - name: N8N_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: n8n-key
+                  key: n8n-key
       - extraManifests:
           - apiVersion: external-secrets.io/v1beta1
             kind: ExternalSecret
             metadata:
-              name: n8n-external-secrets
+              name: n8n-key
               namespace: n8n
             spec:
               secretStoreRef:
                 name: secret-store-provider
                 kind: ClusterSecretStore # or ClusterSecretStore
               target:
-                name: immich-external-secrets
+                name: n8n-key
                 deletionPolicy: Retain
               data:
-                - secretKey: n8n-db-password
+                - secretKey: n8n-key
                   remoteRef:
-                    key: n8n-db-password
+                    key: n8n-key
                     version: "latest"
                     decodingStrategy: None # can be None, Base64, Base64URL or Auto
