@@ -25,3 +25,17 @@ spec:
     requests:
       storage: 5Gi
   storageClassName: nfs-client 
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: n8n-worker-pvc
+  namespace: n8n
+spec:
+  accessModes:
+    # ここは絶対ReadWriteOnce
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: nfs-client

@@ -1,0 +1,54 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pg
+  labels:
+    name: pg
+  
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: my-pgsql-cluster
+  namespace: pg
+spec:
+  description: "My example pg cluster"
+  imageName: ghcr.io/cloudnative-pg/postgresql:16.1
+  instances: 2
+  superuserSecret:
+    name: pg-superuser
+  enableSuperuserAccess: true
+  startDelay: 30
+  stopDelay: 100
+  primaryUpdateStrategy: unsupervised
+  postgresql:
+    # Generated from https://pgtune.leopard.in.ua/
+    parameters:
+      max_connections: '200'
+      shared_buffers: '512MB'
+      effective_cache_size: '1536MB'
+      maintenance_work_mem: '128MB'
+      checkpoint_completion_target: '0.9'
+      wal_buffers: '16MB'
+      default_statistics_target: '100'
+      random_page_cost: '4'
+      effective_io_concurrency: '2'
+      work_mem: '2520kB'
+      huge_pages: 'off'
+      min_wal_size: '1GB'
+      max_wal_size: '4GB'
+    # 接続元設定
+    pg_hba:
+      - host all all 192.168.11.0/24 scram-sha-256
+  # データベース設定
+  bootstrap:
+    initdb:
+      database: my_app_db
+      owner: app_user
+      secret:
+        name: pg-app-user
+      postInitApplicationSQL:
+        - create schema my_app
+  storage:
+    size: 10Gi
+    storageClass: nfs-client
