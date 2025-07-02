@@ -35,6 +35,10 @@ releases:
               value: "queue"
             - name: WEBHOOK_URL
               value: *url
+            - name: OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS
+              value: "true"
+            - name: N8N_RUNNERS_ENABLED
+              value: "true"
           # extraEnv: &extraEnv
           #   - DB_POSTGRESDB_PASSWORD:
           #     valueFrom:
@@ -88,15 +92,6 @@ releases:
             enabled: true
             type: existing
             existingClaim: n8n-worker-pvc
-          resources:
-            limits:
-              cpu: 500m
-              memory: 1Gi
-              ephemeral-storage: 1Gi
-            requests:
-              cpu: 250m
-              memory: 512Mi
-              ephemeral-storage: 500Mi
           tolerations:
             - key: "node.kubernetes.io/disk-pressure"
               operator: "Exists"
@@ -109,6 +104,10 @@ releases:
                 secretKeyRef:
                   name: n8n-key
                   key: n8n-key
+            - name: OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS
+              value: "true"
+            - name: N8N_RUNNERS_ENABLED
+              value: "true"
       - extraManifests:
           - apiVersion: external-secrets.io/v1beta1
             kind: ExternalSecret
