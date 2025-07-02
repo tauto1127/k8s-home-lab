@@ -1,3 +1,6 @@
 Requirements
 - nfs-common
 - gcloud(master-node)
+
+kubectl extensions
+- krew (postgresのオペレーター用)
