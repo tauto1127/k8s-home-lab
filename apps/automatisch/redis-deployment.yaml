@@ -24,7 +24,7 @@ spec:
         io.kompose.service: redis
     spec:
       containers:
-        - image: redis:7.0.4
+        - image: redis:8.2.0
           name: redis
           volumeMounts:
             - mountPath: /data
