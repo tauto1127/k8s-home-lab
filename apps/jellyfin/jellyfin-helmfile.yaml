@@ -1,0 +1,22 @@
+repositories:
+  - name: jellyfin
+    url: https://jellyfin.github.io/jellyfin-helm
+
+releases:
+  - name: jellyfin
+    namespace: jellyfin
+    createNamespace: true
+    chart: jellyfin/jellyfin
+    version: 2.3.0
+    values:
+      - service:
+          type: LoadBalancer
+          annotations:
+            metallb.universe.tf/loadBalancerIPs: 192.168.11.208
+        persistence:
+          config:
+            enabled: true
+            storageClass: nfs-client
+          media:
+            existingClaim: jellyfin-claim
+            enabled: true
