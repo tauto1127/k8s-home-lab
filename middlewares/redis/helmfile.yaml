@@ -7,7 +7,7 @@ releases:
   - name: redis
     namespace: redis
     chart: bitnami/redis
-    version: "21.2.3"
+    version: "21.2.14"
     createNamespace: true
     values:
       - global:
