@@ -9,6 +9,8 @@ releases:
     chart: jellyfin/jellyfin
     version: 2.3.0
     values:
+      - image:
+          tag: "10.10.5"
       - service:
           type: LoadBalancer
           annotations:

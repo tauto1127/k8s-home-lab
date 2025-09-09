@@ -8,7 +8,7 @@ spec:
     # capacity:
     #     storage: 5Gi
     accessModes:
-        - ReadWriteOnce
+        - ReadWriteMany
     capacity: 
       storage: 20Gi
     nfs:
