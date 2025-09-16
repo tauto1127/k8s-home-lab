@@ -4,3 +4,6 @@ Requirements
 
 kubectl extensions
 - krew (postgresのオペレーター用)
+
+注意
+- helmfile.yaml はhelmfileとして認識される
