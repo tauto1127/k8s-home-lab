@@ -57,7 +57,7 @@ spec:
                 configMapKeyRef:
                   key: DB_HOSTNAME
                   name: env
-          image: ghcr.io/immich-app/immich-server:v1.132.3
+          image: ghcr.io/immich-app/immich-server:v1.137.1
           name: immich-server
           ports:
             - containerPort: 2283
