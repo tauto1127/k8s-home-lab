@@ -38,7 +38,7 @@ spec:
       containers:
         - args:
             - redis-server
-          image: redis:7.4-alpine
+          image: redis:8.2-alpine
           livenessProbe:
             exec:
               command:
