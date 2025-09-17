@@ -8,7 +8,7 @@ releases:
     namespace: n8n
     createNamespace: true
     chart: 8gears/n8n
-    version: 1.0.7
+    version: 1.0.15
     values:
       - _shared_config:
           url: &url https://n8n.takutk.com
