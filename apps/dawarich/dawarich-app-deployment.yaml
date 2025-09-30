@@ -62,7 +62,7 @@ spec:
               value: redis://dawarich-redis:6379/0
             - name: TIME_ZONE
               value: Asia/Tokyo
-          image: freikin/dawarich:0.26.6
+          image: freikin/dawarich:0.33.0
           livenessProbe:
             exec:
               command:
