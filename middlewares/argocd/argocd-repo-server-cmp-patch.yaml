@@ -29,7 +29,7 @@ spec:
 
         # CMP用のサイドカーコンテナを追加
         - name: cmp-helmfile # サイドカーコンテナ名 (任意)
-          image: quay.io/argoproj/argocd:v2.14.12 # install.yamlで使われているArgo CDのバージョンに合わせる
+          image: quay.io/argoproj/argocd:v2.14.20 # install.yamlで使われているArgo CDのバージョンに合わせる
           command:
             - /var/run/argocd/argocd-cmp-server # initContainersでコピーされるパス
           env:
