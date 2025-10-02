@@ -6,4 +6,4 @@ releases:
   - name: csi-secrets-store
     namespace: kube-system
     chart: secrets-store-csi-driver/secrets-store-csi-driver
-    version: 1.5.1
+    version: 1.5.4
