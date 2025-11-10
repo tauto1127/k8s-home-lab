@@ -118,6 +118,7 @@ releases:
               secretStoreRef:
                 name: secret-store-provider
                 kind: ClusterSecretStore # or ClusterSecretStore
+              refreshInterval: "24h"
               target:
                 name: n8n-key
                 deletionPolicy: Retain
