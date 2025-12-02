@@ -1,0 +1,26 @@
+repositories:
+  - name: kong
+    url: https://charts.konghq.com
+  - name: kubernetes-dashboard
+    url: https://kubernetes.github.io/dashboard/
+
+releases:
+  - name: kong
+    namespace: kong
+    createNamespace: true
+    chart: kong/kong
+    values:
+      - proxy:
+          type: LoadBalancer
+          annotations:
+            metallb.io/loadBalancerIPs: 192.168.11.211  # ← MetalLBのプール内のIP
+
+  - name: kubernetes-dashboard
+    namespace: kubernetes-dashboard
+    createNamespace: true
+    chart: kubernetes-dashboard/kubernetes-dashboard
+    version: 7.13.0
+    values:
+      - web:
+          service:
+            type: ClusterIP   # ここはLBにしない（デフォルトでもOK）
