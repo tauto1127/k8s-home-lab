@@ -34,7 +34,7 @@ spec:
         io.kompose.service: redis
     spec:
       containers:
-        - image: docker.io/redis:6.2-alpine@sha256:7fe72c486b910f6b1a9769c937dad5d63648ddee82e056f47417542dd40825bb
+        - image: docker.io/redis:8.8-alpine@sha256:09160599abd229764c0fb44cb6be640294e1d360a54b19985ab4843dcf2d90f1
           livenessProbe:
             exec:
               command:
