@@ -39,7 +39,7 @@ spec:
     spec:
       containers:
         - name: mortis
-          image: ghcr.io/mudkipme/mortis:0.25.2
+          image: ghcr.io/mudkipme/mortis:0.29.0
           imagePullPolicy: IfNotPresent
           args:
             - -addr=0.0.0.0

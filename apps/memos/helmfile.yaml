@@ -5,7 +5,7 @@ releases:
     chart: ./chart
     values:
       - image:
-          tag: "0.25.2"
+          tag: "0.29.0"
       - service:
           type: LoadBalancer
           annotations:
