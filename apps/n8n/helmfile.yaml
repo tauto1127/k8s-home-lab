@@ -39,6 +39,12 @@ releases:
               value: "true"
             - name: N8N_RUNNERS_ENABLED
               value: "true"
+            - name: N8N_COMMUNITY_PACKAGES_ENABLED
+              value: "true"
+            - name: N8N_METRICS
+              value: "false"
+            - name: QUEUE_HEALTH_CHECK_ACTIVE
+              value: "true"
           # extraEnv: &extraEnv
           #   - DB_POSTGRESDB_PASSWORD:
           #     valueFrom:
@@ -107,6 +113,8 @@ releases:
             - name: OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS
               value: "true"
             - name: N8N_RUNNERS_ENABLED
+              value: "true"
+            - name: QUEUE_HEALTH_CHECK_ACTIVE
               value: "true"
       - extraManifests:
           - apiVersion: external-secrets.io/v1beta1
