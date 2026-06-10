@@ -1,0 +1,69 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mortis
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mortis
+  namespace: mortis
+  annotations:
+    metallb.io/loadBalancerIPs: 192.168.11.212
+spec:
+  type: LoadBalancer
+  ports:
+    - name: http
+      port: 5231
+      targetPort: 5231
+      protocol: TCP
+  selector:
+    app: mortis
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mortis
+  namespace: mortis
+  labels:
+    app: mortis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mortis
+  template:
+    metadata:
+      labels:
+        app: mortis
+    spec:
+      containers:
+        - name: mortis
+          image: ghcr.io/mudkipme/mortis:0.29.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - -addr=0.0.0.0
+            - -port=5231
+            - -grpc-addr=memos.memos.svc.cluster.local:5230
+          ports:
+            - containerPort: 5231
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /api/v1/status
+              port: 5231
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/v1/status
+              port: 5231
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi

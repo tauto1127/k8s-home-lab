@@ -1,0 +1,19 @@
+releases:
+  - name: memos
+    namespace: memos
+    createNamespace: true
+    chart: ./chart
+    values:
+      - image:
+          tag: "0.29.0"
+      - service:
+          type: LoadBalancer
+          annotations:
+            metallb.io/loadBalancerIPs: 192.168.11.209
+      - persistence:
+          enabled: true
+          storageClass: nfs-client
+          accessMode: ReadWriteOnce
+          size: 10Gi
+      - ingress:
+          enabled: false
