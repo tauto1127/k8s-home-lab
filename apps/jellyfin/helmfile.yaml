@@ -7,10 +7,10 @@ releases:
     namespace: jellyfin
     createNamespace: true
     chart: jellyfin/jellyfin
-    version: 2.3.0
+    version: 3.2.0
     values:
       - image:
-          tag: "10.10.5"
+          tag: "10.11.11"
       - service:
           type: LoadBalancer
           annotations:
