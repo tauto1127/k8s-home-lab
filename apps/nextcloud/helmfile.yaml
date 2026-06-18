@@ -1,8 +1,130 @@
 repositories:
-- name: nextcloud
-  url: https://nextcloud.github.io/helm/
+  - name: nextcloud
+    url: https://nextcloud.github.io/helm/
 
 releases:
-- name: nextcloud
-  namespace: nextcloud
-  chart: nextcloud/nextcloud
+  - name: nextcloud
+    namespace: nextcloud
+    createNamespace: true
+    chart: nextcloud/nextcloud
+    version: "8.0.3"
+    values:
+      - image:
+          tag: "31.0.11-apache"
+      - nextcloud:
+          host: nc.takutk.com
+          existingSecret:
+            enabled: true
+            secretName: nextcloud-db-secret
+            usernameKey: nextcloud-username
+            passwordKey: nextcloud-password
+          trustedDomains:
+            - nc.takutk.com
+            - 192.168.11.4
+          configs:
+            custom.config.php: |-
+              <?php
+              $CONFIG = array (
+                'instanceid' => 'oceeyd54cokv',
+                'passwordsalt' => 'REDACTED',
+                'secret' => 'REDACTED',
+                'installed' => true,
+                'version' => '31.0.11.2',
+                'maintenance_window_start' => 16,
+                'datadirectory' => '/nc-userdata',
+                'dbtype' => 'mysql',
+                'dbhost' => '192.168.11.17',
+                'dbname' => 'nextcloud',
+                'dbuser' => 'nextcloud',
+                'dbpassword' => trim(file_get_contents('/run/secrets/nextcloud/db-password')),
+                'dbtableprefix' => 'oc_',
+                'mysql.utf8mb4' => true,
+                'trusted_domains' => array(
+                  '0' => 'nc.takutk.com',
+                  '1' => '192.168.11.4',
+                  '2' => '192.168.11.213',
+                ),
+                'trusted_proxies' => array('0' => '192.168.11.211', '1' => '10.244.0.0/16'),
+                'overwriteprotocol' => 'https',
+                'overwrite.cli.url' => 'https://nc.takutk.com',
+                'memcache.local' => '\\OC\\Memcache\\APCu',
+                'memcache.locking' => '\\OC\\Memcache\\Redis',
+                'redis' => array(
+                  'host' => 'redis-master.redis.svc.cluster.local',
+                  'port' => 6379,
+                  'timeout' => 0.0,
+                  'password' => '',
+                ),
+                'default_phone_region' => 'JP',
+                'mail_domain' => 'gmail.com',
+                'mail_from_address' => 'takuto2187',
+                'mail_smtpmode' => 'smtp',
+                'mail_smtphost' => 'smtp.gmail.com',
+                'mail_smtpport' => '587',
+                'mail_smtpauth' => 1,
+                'mail_smtpname' => 'takuto2187@gmail.com',
+              );
+          extraVolumes:
+            - name: db-secret
+              secret:
+                secretName: nextcloud-db-secret
+            - name: nextcloud-userdata
+              nfs:
+                server: 192.168.11.9
+                path: /mnt/md0/nextcloud
+          extraVolumeMounts:
+            - name: db-secret
+              mountPath: /run/secrets/nextcloud
+              readOnly: true
+            - name: nextcloud-userdata
+              mountPath: /nc-userdata
+      - internalDatabase:
+          enabled: false
+      - externalDatabase:
+          enabled: true
+          type: mysql
+          host: 192.168.11.17
+          database: nextcloud
+          user: nextcloud
+          existingSecret:
+            secretName: nextcloud-db-secret
+            passwordKey: db-password
+      - redis:
+          enabled: false
+      - persistence:
+          enabled: true
+          storageClass: nfs-client
+          size: 5Gi
+          nextcloudData:
+            enabled: false
+      - service:
+          type: LoadBalancer
+          port: 80
+          annotations:
+            metallb.universe.tf/loadBalancerIPs: 192.168.11.213
+      - cronjob:
+          enabled: true
+          type: cronjob
+          cronjob:
+            schedule: "*/5 * * * *"
+            securityContext:
+              runAsUser: 33
+              runAsGroup: 33
+      - livenessProbe:
+          enabled: false
+      - readinessProbe:
+          enabled: false
+      - ingress:
+          enabled: true
+          className: kong
+          annotations:
+            konghq.com/strip-path: "false"
+          hosts:
+            - host: nc.takutk.com
+              paths:
+                - path: /
+                  pathType: Prefix
+          tls:
+            - secretName: nextcloud-tls
+              hosts:
+                - nc.takutk.com
