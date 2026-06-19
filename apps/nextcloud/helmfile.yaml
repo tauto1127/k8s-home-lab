@@ -47,8 +47,11 @@ releases:
               <?php
               $CONFIG = array (
                 'instanceid' => 'oceeyd54cokv',
-                'passwordsalt' => 'REDACTED',
-                'secret' => 'REDACTED',
+                # passwordsalt and secret are synced from GCP Secret Manager into
+                # nextcloud-db-secret (see external-secret.yaml) and mounted at
+                # /run/secrets/nextcloud. Read them from there instead of hardcoding.
+                'passwordsalt' => trim(file_get_contents('/run/secrets/nextcloud/passwordsalt')),
+                'secret' => trim(file_get_contents('/run/secrets/nextcloud/secret')),
                 'installed' => true,
                 # Required since Nextcloud 33 (Snowflake IDs); single instance => 0.
                 'server_id' => 0,
