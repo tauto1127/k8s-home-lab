@@ -7,12 +7,33 @@ releases:
     namespace: nextcloud
     createNamespace: true
     chart: nextcloud/nextcloud
-    version: "8.0.3"
+    version: "9.1.3"
     values:
       - image:
-          tag: "31.0.11-apache"
+          tag: "33.0.5-apache"
       - nextcloud:
           host: nc.takutk.com
+          # Regenerate pretty-URL .htaccess on every start (webroot is ephemeral emptyDir).
+          extraEnv:
+            - name: NEXTCLOUD_INIT_HTACCESS
+              value: "true"
+          # Seed the webroot (emptyDir) with the image source locally so the main
+          # entrypoint sees installed==image and skips the slow NFS rsync / install branch.
+          extraInitContainers:
+            - name: seed-webroot
+              image: nextcloud:33.0.5-apache
+              command:
+                - sh
+                - -c
+                - >
+                  mkdir -p /seed/html /seed/config /seed/custom_apps /seed/themes /seed/data &&
+                  cp -a /usr/src/nextcloud/. /seed/html/ &&
+                  cp -a /usr/src/nextcloud/config/. /seed/config/ &&
+                  touch /seed/config/config.php &&
+                  chown -R 33:33 /seed
+              volumeMounts:
+                - name: nextcloud-main
+                  mountPath: /seed
           existingSecret:
             enabled: true
             secretName: nextcloud-db-secret
@@ -29,7 +50,19 @@ releases:
                 'passwordsalt' => 'REDACTED',
                 'secret' => 'REDACTED',
                 'installed' => true,
-                'version' => '31.0.11.2',
+                # Required since Nextcloud 33 (Snowflake IDs); single instance => 0.
+                'server_id' => 0,
+                # App Store apps install into the persistent (NFS) path so they survive
+                # the ephemeral emptyDir webroot being re-seeded on every restart.
+                'apps_paths' => array(
+                  array('path' => '/var/www/html/apps', 'url' => '/apps', 'writable' => false),
+                  array('path' => '/var/www/html/persistent_apps', 'url' => '/persistent_apps', 'writable' => true),
+                ),
+                # Pinned because the webroot is an ephemeral emptyDir: the primary
+                # config.php (where occ writes the version) does not survive restarts,
+                # so the installed DB-schema version must be declared here. Bump this to
+                # the new version AFTER running `occ upgrade` when upgrading Nextcloud.
+                'version' => '33.0.5.1',
                 'maintenance_window_start' => 16,
                 'datadirectory' => '/nc-userdata',
                 'dbtype' => 'mysql',
@@ -72,12 +105,21 @@ releases:
               nfs:
                 server: 192.168.11.9
                 path: /mnt/md0/nextcloud
+            # Persistent (NFS) writable apps dir so App Store apps survive restarts.
+            # Only a handful of small files, so NFS latency is fine here (unlike the
+            # 24k-file webroot). Registered via apps_paths in custom.config.php.
+            - name: nextcloud-persistent-apps
+              nfs:
+                server: 192.168.11.9
+                path: /mnt/md0/apps/nextcloud/persistent_apps
           extraVolumeMounts:
             - name: db-secret
               mountPath: /run/secrets/nextcloud
               readOnly: true
             - name: nextcloud-userdata
               mountPath: /nc-userdata
+            - name: nextcloud-persistent-apps
+              mountPath: /var/www/html/persistent_apps
       - internalDatabase:
           enabled: false
       - externalDatabase:
@@ -92,9 +134,10 @@ releases:
       - redis:
           enabled: false
       - persistence:
-          enabled: true
-          storageClass: nfs-client
-          size: 5Gi
+          # Webroot lives on a node-local emptyDir, NOT NFS. The image source is
+          # re-seeded by the seed-webroot initContainer on each start (fast, local).
+          # Only DB (external MySQL) and user data (/nc-userdata NFS) are persistent.
+          enabled: false
           nextcloudData:
             enabled: false
       - service:
@@ -103,13 +146,10 @@ releases:
           annotations:
             metallb.universe.tf/loadBalancerIPs: 192.168.11.213
       - cronjob:
+          # Sidecar crond in the deployment pod: it shares the seed-webroot emptyDir
+          # (so cron.php has the code) instead of spawning a separate empty-webroot pod.
           enabled: true
-          type: cronjob
-          cronjob:
-            schedule: "*/5 * * * *"
-            securityContext:
-              runAsUser: 33
-              runAsGroup: 33
+          type: sidecar
       - livenessProbe:
           enabled: false
       - readinessProbe:
