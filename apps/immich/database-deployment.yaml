@@ -57,8 +57,14 @@ spec:
           image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0@sha256:41eacbe83eca995561fe43814fd4891e16e39632806253848efaf04d3c8a8b84
           livenessProbe:
             exec:
+              # Kubernetes exec probes do not invoke a shell automatically.
               command:
-                - pg_isready --dbname="${POSTGRES_DB}" --username="${POSTGRES_USER}" || exit 1; Chksum="$(psql --dbname="${POSTGRES_DB}" --username="${POSTGRES_USER}" --tuples-only --no-align --command='SELECT COALESCE(SUM(checksum_failures), 0) FROM pg_stat_database')"; echo "checksum failure count is $Chksum"; [ "$Chksum" = '0' ] || exit 1
+                - /usr/bin/sh
+                - -c
+                - >-
+                  pg_isready --dbname="${POSTGRES_DB:-}" --username="${POSTGRES_USER:-}" >/dev/null &&
+                  Chksum="$(psql --dbname="${POSTGRES_DB:-}" --username="${POSTGRES_USER:-}" --tuples-only --no-align --command="SELECT COALESCE(SUM(checksum_failures), 0) FROM pg_stat_database")" &&
+                  [ "$Chksum" = 0 ]
             initialDelaySeconds: 300
             periodSeconds: 300
           name: immich-postgres
