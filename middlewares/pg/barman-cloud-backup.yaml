@@ -1,0 +1,41 @@
+# The access secret is intentionally not committed. Create/update
+# pg-b2-credentials in the pg namespace from Bitwarden before applying this.
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: postgres-b2
+  namespace: pg
+spec:
+  configuration:
+    destinationPath: s3://takuto-postgres/cnpg/
+    endpointURL: https://s3.us-west-004.backblazeb2.com
+    s3Credentials:
+      accessKeyId:
+        name: pg-b2-credentials
+        key: ACCESS_KEY_ID
+      secretAccessKey:
+        name: pg-b2-credentials
+        key: ACCESS_SECRET_KEY
+      region:
+        name: pg-b2-credentials
+        key: AWS_REGION
+    data:
+      compression: gzip
+    wal:
+      compression: gzip
+  retentionPolicy: 14d
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: my-pgsql-cluster-daily
+  namespace: pg
+spec:
+  # CloudNativePG uses six-field cron expressions. This is 03:00 JST daily.
+  schedule: "0 0 18 * * *"
+  backupOwnerReference: self
+  cluster:
+    name: my-pgsql-cluster
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io

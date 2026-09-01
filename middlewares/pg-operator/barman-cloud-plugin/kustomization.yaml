@@ -1,0 +1,5 @@
+# Pin the official release and place the plugin beside the existing CNPG
+# controller. The plugin requires cert-manager for its mutual-TLS certificates.
+namespace: pg-operator
+resources:
+  - https://github.com/cloudnative-pg/plugin-barman-cloud/releases/download/v0.14.0/manifest.yaml
