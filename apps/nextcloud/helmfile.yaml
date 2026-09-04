@@ -1,8 +1,173 @@
 repositories:
-- name: nextcloud
-  url: https://nextcloud.github.io/helm/
+  - name: nextcloud
+    url: https://nextcloud.github.io/helm/
 
 releases:
-- name: nextcloud
-  namespace: nextcloud
-  chart: nextcloud/nextcloud
+  - name: nextcloud
+    namespace: nextcloud
+    createNamespace: true
+    chart: nextcloud/nextcloud
+    version: "9.1.3"
+    values:
+      - image:
+          tag: "33.0.5-apache"
+      - nextcloud:
+          host: nc.takutk.com
+          # Regenerate pretty-URL .htaccess on every start (webroot is ephemeral emptyDir).
+          extraEnv:
+            - name: NEXTCLOUD_INIT_HTACCESS
+              value: "true"
+          # Seed the webroot (emptyDir) with the image source locally so the main
+          # entrypoint sees installed==image and skips the slow NFS rsync / install branch.
+          extraInitContainers:
+            - name: seed-webroot
+              image: nextcloud:33.0.5-apache
+              command:
+                - sh
+                - -c
+                - >
+                  mkdir -p /seed/html /seed/config /seed/custom_apps /seed/themes /seed/data &&
+                  cp -a /usr/src/nextcloud/. /seed/html/ &&
+                  cp -a /usr/src/nextcloud/config/. /seed/config/ &&
+                  touch /seed/config/config.php &&
+                  chown -R 33:33 /seed
+              volumeMounts:
+                - name: nextcloud-main
+                  mountPath: /seed
+          existingSecret:
+            enabled: true
+            secretName: nextcloud-db-secret
+            usernameKey: nextcloud-username
+            passwordKey: nextcloud-password
+          trustedDomains:
+            - nc.takutk.com
+            - 192.168.11.4
+          configs:
+            custom.config.php: |-
+              <?php
+              $CONFIG = array (
+                'instanceid' => 'oceeyd54cokv',
+                # passwordsalt and secret are synced from GCP Secret Manager into
+                # nextcloud-db-secret (see external-secret.yaml) and mounted at
+                # /run/secrets/nextcloud. Read them from there instead of hardcoding.
+                'passwordsalt' => trim(file_get_contents('/run/secrets/nextcloud/passwordsalt')),
+                'secret' => trim(file_get_contents('/run/secrets/nextcloud/secret')),
+                'installed' => true,
+                # Required since Nextcloud 33 (Snowflake IDs); single instance => 0.
+                'server_id' => 0,
+                # App Store apps install into the persistent (NFS) path so they survive
+                # the ephemeral emptyDir webroot being re-seeded on every restart.
+                'apps_paths' => array(
+                  array('path' => '/var/www/html/apps', 'url' => '/apps', 'writable' => false),
+                  array('path' => '/var/www/html/persistent_apps', 'url' => '/persistent_apps', 'writable' => true),
+                ),
+                # Pinned because the webroot is an ephemeral emptyDir: the primary
+                # config.php (where occ writes the version) does not survive restarts,
+                # so the installed DB-schema version must be declared here. Bump this to
+                # the new version AFTER running `occ upgrade` when upgrading Nextcloud.
+                'version' => '33.0.5.1',
+                'maintenance_window_start' => 16,
+                'datadirectory' => '/nc-userdata',
+                'dbtype' => 'mysql',
+                'dbhost' => '192.168.11.17',
+                'dbname' => 'nextcloud',
+                'dbuser' => 'nextcloud',
+                'dbpassword' => trim(file_get_contents('/run/secrets/nextcloud/db-password')),
+                'dbtableprefix' => 'oc_',
+                'mysql.utf8mb4' => true,
+                'trusted_domains' => array(
+                  '0' => 'nc.takutk.com',
+                  '1' => '192.168.11.4',
+                  '2' => '192.168.11.213',
+                ),
+                'trusted_proxies' => array('0' => '192.168.11.211', '1' => '10.244.0.0/16'),
+                'overwriteprotocol' => 'https',
+                'overwrite.cli.url' => 'https://nc.takutk.com',
+                'memcache.local' => '\\OC\\Memcache\\APCu',
+                'memcache.locking' => '\\OC\\Memcache\\Redis',
+                'redis' => array(
+                  'host' => 'redis-master.redis.svc.cluster.local',
+                  'port' => 6379,
+                  'timeout' => 0.0,
+                  'password' => '',
+                ),
+                'default_phone_region' => 'JP',
+                'mail_domain' => 'gmail.com',
+                'mail_from_address' => 'takuto2187',
+                'mail_smtpmode' => 'smtp',
+                'mail_smtphost' => 'smtp.gmail.com',
+                'mail_smtpport' => '587',
+                'mail_smtpauth' => 1,
+                'mail_smtpname' => 'takuto2187@gmail.com',
+              );
+          extraVolumes:
+            - name: db-secret
+              secret:
+                secretName: nextcloud-db-secret
+            - name: nextcloud-userdata
+              nfs:
+                server: 192.168.11.9
+                path: /mnt/md0/nextcloud
+            # Persistent (NFS) writable apps dir so App Store apps survive restarts.
+            # Only a handful of small files, so NFS latency is fine here (unlike the
+            # 24k-file webroot). Registered via apps_paths in custom.config.php.
+            - name: nextcloud-persistent-apps
+              nfs:
+                server: 192.168.11.9
+                path: /mnt/md0/apps/nextcloud/persistent_apps
+          extraVolumeMounts:
+            - name: db-secret
+              mountPath: /run/secrets/nextcloud
+              readOnly: true
+            - name: nextcloud-userdata
+              mountPath: /nc-userdata
+            - name: nextcloud-persistent-apps
+              mountPath: /var/www/html/persistent_apps
+      - internalDatabase:
+          enabled: false
+      - externalDatabase:
+          enabled: true
+          type: mysql
+          host: 192.168.11.17
+          database: nextcloud
+          user: nextcloud
+          existingSecret:
+            secretName: nextcloud-db-secret
+            passwordKey: db-password
+      - redis:
+          enabled: false
+      - persistence:
+          # Webroot lives on a node-local emptyDir, NOT NFS. The image source is
+          # re-seeded by the seed-webroot initContainer on each start (fast, local).
+          # Only DB (external MySQL) and user data (/nc-userdata NFS) are persistent.
+          enabled: false
+          nextcloudData:
+            enabled: false
+      - service:
+          type: LoadBalancer
+          port: 80
+          annotations:
+            metallb.universe.tf/loadBalancerIPs: 192.168.11.213
+      - cronjob:
+          # Sidecar crond in the deployment pod: it shares the seed-webroot emptyDir
+          # (so cron.php has the code) instead of spawning a separate empty-webroot pod.
+          enabled: true
+          type: sidecar
+      - livenessProbe:
+          enabled: false
+      - readinessProbe:
+          enabled: false
+      - ingress:
+          enabled: true
+          className: kong
+          annotations:
+            konghq.com/strip-path: "false"
+          hosts:
+            - host: nc.takutk.com
+              paths:
+                - path: /
+                  pathType: Prefix
+          tls:
+            - secretName: nextcloud-tls
+              hosts:
+                - nc.takutk.com
