@@ -7,3 +7,9 @@ kubectl extensions
 
 注意
 - helmfile.yaml はhelmfileとして認識される
+
+Manifest validation
+- `aqua install`
+- `bash scripts/validate-manifests.sh`
+
+Flux migration ownership is recorded in `docs/manifest-ownership.md`.

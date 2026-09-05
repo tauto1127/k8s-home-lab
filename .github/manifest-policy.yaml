@@ -1,0 +1,45 @@
+excludedManifests:
+  - path: pv/storageTest.yaml
+    reason: Diagnostic Pod; not part of production reconciliation.
+  - path: pv/test-pvc.yaml
+    reason: Bound test PVC; cleanup requires a separate storage decision.
+
+migrationPendingManifests:
+  - path: apps/dashboard/crb-user-root.yaml
+    reason: Existing cluster-admin binding; keep outside every reconciliation package until least-privilege replacement is approved.
+  - path: apps/wordpress/mysql-deployment.yaml
+    reason: Root credential now references ExternalSecret, but parity with the former literal is intentionally unverified; keep outside reconciliation until rotation.
+
+floatingImages:
+  - path: apps/immich/immich-machine-learning-deployment.yaml
+    image: ghcr.io/immich-app/immich-machine-learning:release
+    reason: Pin only after the live image digest and server compatibility are verified.
+
+clusterAdminBindings:
+  - path: apps/dashboard/crb-user-root.yaml
+    name: root
+    sha256: 6dff5d11260bbe637189a8bf9b5fc9fe062d3dc3b9ead90ffab456012e7e997b
+    reason: Existing break-glass Dashboard access; replace with least privilege before Flux migration.
+
+renderedFloatingImages:
+  - namespace: immich
+    kind: Deployment
+    name: immich-machine-learning
+    image: ghcr.io/immich-app/immich-machine-learning:release
+    reason: Pin only after the live image digest and server compatibility are verified.
+  - namespace: default
+    kind: Pod
+    name: n8n-test-connection
+    image: alpine
+    reason: Upstream n8n chart 1.0.7 hard-codes this image in a Helm test hook.
+  - namespace: portainer
+    kind: Pod
+    name: portainer-test-connection
+    image: busybox
+    reason: Upstream Portainer chart 1.0.62 hard-codes this image in a Helm test hook.
+
+renderedClusterAdminBindings:
+  - namespace: default
+    name: portainer
+    sha256: 97a6571c1d2d507f100fdf34bcaf696ee025645ec4f022b0092ebd8d34c94ec2
+    reason: Existing Portainer chart binding; rendered roleRef and subjects must remain identical to live until least privilege is designed.

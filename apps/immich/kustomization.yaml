@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - database-claim0-persistentvolumeclaim.yaml
+  - database-deployment.yaml
+  - env-configmap.yaml
+  - external-secret.yaml
+  - immich-machine-learning-deployment.yaml
+  - immich-server-claim0-persistentvolumeclaim.yaml
+  - immich-server-cm1-configmap.yaml
+  - immich-server-deployment.yaml
+  - immich-server-service.yaml
+  - model-cache-persistentvolumeclaim.yaml
+  - redis-deployment.yaml

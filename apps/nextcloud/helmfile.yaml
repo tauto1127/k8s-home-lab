@@ -6,3 +6,4 @@ releases:
 - name: nextcloud
   namespace: nextcloud
   chart: nextcloud/nextcloud
+  version: 9.1.3

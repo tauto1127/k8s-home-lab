@@ -1,0 +1,34 @@
+name: validate-manifests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-manifests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-manifests:
+    name: validate-manifests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install pinned validation tools
+        uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5
+        with:
+          aqua_version: v2.62.3
+
+      - name: Resolve tool checksums
+        run: aqua install
+
+      - name: Validate and render manifests
+        run: bash scripts/validate-manifests.sh

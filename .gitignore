@@ -1,0 +1,9 @@
+# Local credentials and ad-hoc API artifacts must never be committed.
+.env
+.env.*
+!.env.example
+apps/dashboard/token
+apps/dashboard/tmp
+
+# Local render output.
+.rendered/
