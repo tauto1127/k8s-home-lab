@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: taskschuter-mcp
+  namespace: taskschuter-mcp
+  labels:
+    app.kubernetes.io/name: taskschuter-mcp
+    app.kubernetes.io/part-of: taskschuter-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: taskschuter-mcp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: taskschuter-mcp
+        app.kubernetes.io/part-of: taskschuter-mcp
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: taskschuter-mcp-ghcr
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mcp
+          image: ghcr.io/tauto1127/taskchuter_mcp@sha256:391915d534d0ce6eaaa39c1c5c674fa6aa92f2a43303fa264d40eea8cb47e51d
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: taskschuter-mcp-config
+          env:
+            - name: SUPABASE_PUBLISHABLE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: taskschuter-mcp-runtime
+                  key: SUPABASE_PUBLISHABLE_KEY
+            - name: TASKSCHUTER_ALLOWED_USER_IDS
+              valueFrom:
+                secretKeyRef:
+                  name: taskschuter-mcp-runtime
+                  key: TASKSCHUTER_ALLOWED_USER_IDS
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

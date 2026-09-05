@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: taskschuter-mcp-config
+  namespace: taskschuter-mcp
+data:
+  MCP_PUBLIC_URL: https://mcp.takutk.com
+  PORT: "8080"
+  SUPABASE_URL: https://avumaygzugkjonsopufl.supabase.co
+  TASKSCHUTER_TIMEZONE: Asia/Tokyo
