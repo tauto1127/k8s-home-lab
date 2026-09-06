@@ -116,6 +116,8 @@ Dir.mktmpdir("manifest-validation-test") do |temporary_root|
   assert(!(stdout + stderr).include?("FIXTURE_SECRET_VALUE"), "allowed Secret policy output disclosed a fixture value")
   sanitized_secret = File.read(File.join(sanitized_root, "secret.yaml"))
   assert(!sanitized_secret.include?("FIXTURE_SECRET_VALUE"), "sanitized output retained an allowed Secret value")
+  assert(!sanitized_secret.include?("FIXTURE_SECRET_CHECKSUM"), "sanitized output retained a Secret-derived checksum")
+  assert(sanitized_secret.include?("FIXTURE_CONFIGMAP_CHECKSUM"), "sanitization changed a non-Secret checksum")
   assert(sanitized_secret.include?("REDACTED"), "sanitized output did not redact an allowed Secret value")
 end
 

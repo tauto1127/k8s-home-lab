@@ -28,7 +28,8 @@ fi
 
 for kustomization in "${kustomizations[@]}"; do
   package_dir="$(dirname "${kustomization}")"
-  output_name="${package_dir//\//_}.yaml"
+  output_name="${kustomization}.rendered.yaml"
+  mkdir -p "${render_root}/kustomize/$(dirname "${output_name}")"
   kubectl kustomize "${package_dir}" > "${render_root}/kustomize/${output_name}"
   printf 'kustomize/%s\t%s\n' "${output_name}" "${kustomization}" >> "${render_root}/source-map.tsv"
 done
@@ -36,7 +37,8 @@ done
 helm lint apps/memos/chart
 
 while IFS= read -r helmfile_path; do
-  output_name="${helmfile_path//\//_}"
+  output_name="${helmfile_path}.rendered.yaml"
+  mkdir -p "${render_root}/helmfile/$(dirname "${output_name}")"
   helmfile --file "${helmfile_path}" lint
   helmfile --file "${helmfile_path}" template > "${render_root}/helmfile/${output_name}"
   printf 'helmfile/%s\t%s\n' "${output_name}" "${helmfile_path}" >> "${render_root}/source-map.tsv"

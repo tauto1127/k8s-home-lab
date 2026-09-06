@@ -122,6 +122,23 @@ module ManifestPolicyHelpers
       document.dig("roleRef", "name") == "cluster-admin"
   end
 
+  def redact_secret_checksums!(value)
+    case value
+    when Hash
+      annotations = value["annotations"]
+      if annotations.is_a?(Hash)
+        annotations.each_key do |key|
+          annotations[key] = "REDACTED" if key.to_s.match?(%r{(?:\A|/)checksum/secret\z}i)
+        end
+      end
+      value.each_value { |child| redact_secret_checksums!(child) }
+    when Array
+      value.each { |child| redact_secret_checksums!(child) }
+    end
+
+    value
+  end
+
   def deep_sort(value)
     case value
     when Hash

@@ -112,6 +112,7 @@ Dir.glob(render_root.join("**/*.yaml")).sort.each do |path|
 
   next unless sanitized_root
 
+  sanitized_stream.each { |document| redact_secret_checksums!(document) }
   sanitized_path = sanitized_root.join(relative_path)
   FileUtils.mkdir_p(sanitized_path.dirname)
   File.write(sanitized_path, sanitized_stream.map { |document| YAML.dump(document) }.join)
