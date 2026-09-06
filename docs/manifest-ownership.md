@@ -34,15 +34,15 @@ PVC、PV、namespace、CRD、privileged bindingは、初回移行時に
 | `apps/metube/*.yaml`, `apps/mortis/*.yaml` | flux-candidate | raw workload package。 |
 | `apps/n8n/test-pvc.yaml`, `kustomization.yaml` | flux-candidate | ファイル名に反して、Helm releaseが参照するliveのn8n PVC 3個を定義している。 |
 | `apps/n8n/helmfile.yaml` | migration-pending | releaseとExternalSecretのextra objectを一緒に変換する。 |
-| `apps/nextcloud/helmfile.yaml` | migration-pending | chart 9.1.3、liveのNextcloud image digest、ExternalSecret生成の既存Secret参照は固定済みだが、PR #36により完全なdesired configurationが示されている。変換前にownershipと残りのvaluesを整理する。 |
+| `apps/nextcloud/helmfile.yaml` | migration-pending | chart 9.1.3、liveのNextcloud image digest、liveのExternalSecret target/store/remote keyを安全なフィールドだけで一致確認した。PR #36の全valuesは未証明のため、Flux HelmReleaseは停止状態で残す。 |
 | `apps/portainer/portainer-pvc.yaml`, `kustomization.yaml` | flux-candidate | PVCの削除保護が必要。 |
 | `apps/portainer/helmfile.yaml` | migration-pending | render結果と比較してから変換する。 |
 | `apps/wordpress/external-secret.yaml`, `wordpress-deployment.yaml`, `wordpress-pvc.yaml`, `kustomization.yaml` | flux-candidate | WordPress workloadの入力。現時点ではpackageからMySQLを意図的に除外している。 |
 | `apps/wordpress/mysql-deployment.yaml` | migration-pending | Gitで追跡していたroot passwordは削除済み。credentialをrotateして検証するまで、暫定的なExternalSecret参照をreconciliationしてはならない。 |
 | `middlewares/cert-manager/helmfile.yaml` | migration-pending | 依存するresourceより先にcontroller releaseを変換する。 |
 | `middlewares/couchdb/*.yaml` | flux-candidate | workload、PVC、ConfigMap、ExternalSecret、package Kustomization。 |
-| `middlewares/external-secrets-operator/gcp-provider.yaml`, `kustomization.yaml` | migration-pending | liveのExternal Secrets Operator releaseには、このrepository内のGit ownerが記録されていない。controller ownerとdependencyを明示するまでproviderをreconciliation対象外にする。 |
-| `middlewares/external-secrets-operator/helmfile.yaml` | migration-pending | desiredのSecrets Store CSI Driver chartは1.5.1、liveは1.4.8。このfileはExternal Secrets Operator本体をinstallしないため、変換時にownership boundaryをrenameまたは分割する。 |
+| `clusters/home/packages/eso-config/clustersecretstore.yaml` | migration-pending | `ClusterSecretStore`のGit owner。controller依存が解決するまで停止する。`gcpsm-secret`のdataは外部プロビジョニング前提で取り込まない。 |
+| `middlewares/secrets-store-csi-driver/helmfile.yaml` | migration-pending | CSIの所有境界をESO directoryから分離し、live 1.4.8を移行baselineに固定する。Renovate PR #28の1.6.0は別管理。 |
 | `middlewares/grafana/grafana-external-secrets.yaml`, `kustomization.yaml` | flux-candidate | secret materialは外部に保持する。 |
 | `middlewares/grafana/helmfile.yaml` | migration-pending | render結果と比較してから変換する。 |
 | `middlewares/metallb-native/*.yaml` | flux-candidate | vendored controller bundleとaddress configuration。 |

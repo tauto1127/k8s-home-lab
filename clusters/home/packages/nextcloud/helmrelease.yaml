@@ -1,0 +1,39 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: nextcloud
+  namespace: nextcloud
+spec:
+  interval: 30m
+  timeout: 10m
+  suspend: true
+  releaseName: nextcloud
+  chart:
+    spec:
+      chart: nextcloud
+      version: 9.1.3
+      sourceRef:
+        kind: HelmRepository
+        name: nextcloud
+        namespace: flux-system
+      interval: 30m
+  install:
+    createNamespace: true
+    remediation:
+      retries: 0
+  upgrade:
+    remediation:
+      retries: 0
+      remediateLastFailure: false
+  uninstall:
+    keepHistory: true
+  values:
+    image:
+      repository: docker.io/library/nextcloud
+      tag: 33.0.5-apache@sha256:476228e615088e7d2de4bd9a87187961dfbff1577a96ff07955ec35dbe18f3c9
+    nextcloud:
+      existingSecret:
+        enabled: true
+        secretName: nextcloud-db-secret
+        usernameKey: nextcloud-username
+        passwordKey: nextcloud-password
