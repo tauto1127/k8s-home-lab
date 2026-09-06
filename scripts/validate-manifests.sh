@@ -16,6 +16,7 @@ mkdir -p "${render_root}/kustomize" "${render_root}/helmfile"
 : > "${render_root}/source-map.tsv"
 
 ruby scripts/validate-manifest-policy.rb
+ruby scripts/validate-flux-ownership.rb
 
 kustomizations=()
 while IFS= read -r kustomization; do
