@@ -121,6 +121,14 @@ Dir.mktmpdir("manifest-validation-test") do |temporary_root|
   assert(sanitized_secret.include?("REDACTED"), "sanitized output did not redact an allowed Secret value")
 end
 
+Dir.mktmpdir("hidden-rendered-policy-test") do |temporary_root|
+  hidden_root = File.join(temporary_root, ".hidden")
+  FileUtils.mkdir_p(hidden_root)
+  FileUtils.cp(File.join(FIXTURES, "rendered-policy/env-list.yaml.fixture"), File.join(hidden_root, "env-list.yaml"))
+  stdout, stderr = assert_failure("ruby", "scripts/validate-rendered-policy.rb", temporary_root)
+  assert((stdout + stderr).include?(".hidden/env-list.yaml"), "rendered policy skipped a dot-directory manifest")
+end
+
 assert_success("ruby", "scripts/validate-kubeconform-policy.rb", File.join(FIXTURES, "kubeconform/allowed-schema.json"))
 stdout, stderr = assert_failure("ruby", "scripts/validate-kubeconform-policy.rb", File.join(FIXTURES, "kubeconform/unknown-schema.json"))
 assert((stdout + stderr).include?("apps/v999/Deployment"), "unknown apiVersion/kind was not rejected")
@@ -129,6 +137,11 @@ Dir.mktmpdir("kustomization-roots-test") do |temporary_root|
   FileUtils.mkdir_p(File.join(temporary_root, "parent/child"))
   FileUtils.mkdir_p(File.join(temporary_root, "standalone"))
   FileUtils.mkdir_p(File.join(temporary_root, "alternate"))
+  FileUtils.mkdir_p(File.join(temporary_root, ".hidden"))
+  File.write(
+    File.join(temporary_root, ".hidden/kustomization.yaml"),
+    "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: []\n"
+  )
   File.write(
     File.join(temporary_root, "parent/kustomization.yaml"),
     "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - child\n"
@@ -149,7 +162,7 @@ Dir.mktmpdir("kustomization-roots-test") do |temporary_root|
   assert(status.success?, "kustomization root discovery failed: #{stderr}")
   roots = stdout.lines.map(&:chomp)
   assert(
-    roots == ["alternate/kustomization.yml", "parent/kustomization.yaml", "standalone/kustomization.yaml"],
+    roots == [".hidden/kustomization.yaml", "alternate/kustomization.yml", "parent/kustomization.yaml", "standalone/kustomization.yaml"],
     "Kustomization variants or nested package discovery are incorrect: #{roots.inspect}"
   )
 end

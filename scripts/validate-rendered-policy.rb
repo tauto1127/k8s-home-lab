@@ -48,7 +48,7 @@ secret_exceptions = Array(policy["renderedSecretExceptions"])
 failures = []
 resource_count = 0
 
-Dir.glob(render_root.join("**/*.yaml")).sort.each do |path|
+Dir.glob(render_root.join("**/*.yaml"), File::FNM_DOTMATCH).sort.each do |path|
   relative_path = Pathname.new(path).relative_path_from(render_root).to_s
   source_path = source_map[relative_path]
   stream = load_yaml_stream(path)

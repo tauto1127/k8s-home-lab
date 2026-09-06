@@ -21,7 +21,7 @@ def load_kustomization(path)
 end
 
 kustomizations = KUSTOMIZATION_FILENAMES.flat_map do |filename|
-  Dir.glob(root.join("**", filename).to_s)
+  Dir.glob(root.join("**", filename).to_s, File::FNM_DOTMATCH)
 end.map { |path| Pathname.new(path).realpath }.uniq.sort_by(&:to_s)
 referenced_package_dirs = Set.new
 
