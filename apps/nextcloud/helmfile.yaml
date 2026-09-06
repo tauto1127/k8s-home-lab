@@ -6,3 +6,13 @@ releases:
 - name: nextcloud
   namespace: nextcloud
   chart: nextcloud/nextcloud
+  version: 9.1.3
+  values:
+  - image:
+      tag: "33.0.5-apache@sha256:476228e615088e7d2de4bd9a87187961dfbff1577a96ff07955ec35dbe18f3c9"
+    nextcloud:
+      existingSecret:
+        enabled: true
+        secretName: nextcloud-db-secret
+        usernameKey: nextcloud-username
+        passwordKey: nextcloud-password

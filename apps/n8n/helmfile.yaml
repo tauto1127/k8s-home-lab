@@ -31,19 +31,21 @@ releases:
                   host: redis-master.redis.svc.cluster.local
                   port: 6379
           extraEnv:
-            - name: EXECUTIONS_MODE
+            EXECUTIONS_MODE:
               value: "queue"
-            - name: WEBHOOK_URL
+            WEBHOOK_URL:
               value: *url
-            - name: OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS
+            OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS:
               value: "true"
-            - name: N8N_RUNNERS_ENABLED
+            N8N_RUNNERS_ENABLED:
               value: "true"
-            - name: N8N_COMMUNITY_PACKAGES_ENABLED
+            N8N_COMMUNITY_PACKAGES_ENABLED:
               value: "true"
-            - name: N8N_METRICS
+            N8N_METRICS:
               value: "false"
-            - name: QUEUE_HEALTH_CHECK_ACTIVE
+            N8N_PORT:
+              value: "5678"
+            QUEUE_HEALTH_CHECK_ACTIVE:
               value: "true"
           # extraEnv: &extraEnv
           #   - DB_POSTGRESDB_PASSWORD:
@@ -83,15 +85,17 @@ releases:
               operator: "Exists"
               effect: "NoSchedule"
           extraEnv:
-            - name: WEBHOOK_URL
+            WEBHOOK_URL:
               value: *url
-            - name: EXECUTIONS_MODE
+            EXECUTIONS_MODE:
               value: "queue"
-            - name: N8N_ENCRYPTION_KEY
+            N8N_ENCRYPTION_KEY:
               valueFrom:
                 secretKeyRef:
                   name: n8n-key
                   key: n8n-key
+            N8N_PORT:
+              value: "5678"
       - worker:
           enabled: true
           persistence:
@@ -103,18 +107,20 @@ releases:
               operator: "Exists"
               effect: "NoSchedule"
           extraEnv:
-            - name: EXECUTIONS_MODE
+            EXECUTIONS_MODE:
               value: "queue"
-            - name: N8N_ENCRYPTION_KEY
+            N8N_ENCRYPTION_KEY:
               valueFrom:
                 secretKeyRef:
                   name: n8n-key
                   key: n8n-key
-            - name: OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS
+            N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS:
               value: "true"
-            - name: N8N_RUNNERS_ENABLED
+            OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS:
               value: "true"
-            - name: QUEUE_HEALTH_CHECK_ACTIVE
+            N8N_RUNNERS_ENABLED:
+              value: "true"
+            QUEUE_HEALTH_CHECK_ACTIVE:
               value: "true"
       - extraManifests:
           - apiVersion: external-secrets.io/v1beta1

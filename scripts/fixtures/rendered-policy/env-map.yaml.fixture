@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: env-map
+  namespace: default
+data:
+  extraEnv:
+    AWS_SECRET_ACCESS_KEY: REDACTED
+    CLIENT_SECRET: REDACTED
+    SECRET_KEY_BASE: REDACTED
+    DATABASE_URL: REDACTED

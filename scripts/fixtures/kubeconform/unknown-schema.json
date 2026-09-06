@@ -1,0 +1,18 @@
+{
+  "resources": [
+    {
+      "filename": "unknown.yaml",
+      "kind": "Deployment",
+      "name": "unknown",
+      "version": "apps/v999",
+      "status": "statusSkipped",
+      "msg": ""
+    }
+  ],
+  "summary": {
+    "valid": 0,
+    "invalid": 0,
+    "errors": 0,
+    "skipped": 1
+  }
+}

@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+if aqua exec -- gitleaks git --pre-commit --redact=100 --staged --no-banner --log-level=error >/dev/null 2>&1; then
+  exit 0
+fi
+
+printf '%s\n' 'Gitleaks blocked this commit: staged content failed secret scanning.' >&2
+exit 1
