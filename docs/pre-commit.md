@@ -10,15 +10,25 @@ Setup:
     aqua install
     aqua exec -- pre-commit install
 
-Run the same check manually against all repository files:
+Run the staged hook manually (the normal commit-time check):
 
-    aqua exec -- pre-commit run --all-files
+    aqua exec -- pre-commit run
+
+This hook intentionally scans only the staged Git index. `--all-files` only
+asks pre-commit to invoke the hook for every configured file; this repository's
+hook ignores those filenames and still runs Gitleaks with `--staged`, so it is
+not a full-tree scan.
+
+Run a separate full working-tree scan when you need repository-wide coverage:
+
+    aqua exec -- gitleaks dir --redact=100 --no-banner --no-color .
 
 The Aqua registry and both tool versions are pinned in `aqua.yaml` and
-`.pre-commit-config.yaml`. The regression test also proves that a staged
-synthetic canary is rejected without disclosing its value:
+`.pre-commit-config.yaml`. The regression test first proves a clean staged
+fixture passes, then proves a staged synthetic canary is rejected without
+disclosing its value:
 
-    aqua exec -- ruby scripts/test-pre-commit.rb
+    ruby scripts/test-pre-commit.rb
 
 If the hook is intentionally bypassed, the equivalent CI check still runs on
 pull requests.
