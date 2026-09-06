@@ -57,8 +57,7 @@ PR #36にはこれらの候補定義があるが、PR2では取り込まず、�
 
 ## unknown / activation blockers
 
-- Flux CRD、source-controller、kustomize-controller、helm-controllerはliveに存在せず、
-  Flux namespace/CRD/releaseも不在。bootstrapが別途必要。
+- 2026-09-07のread-only再確認でも、Flux namespace、Flux CRD/controller、Flux Helm releaseはliveに存在しなかった。Gitには後続PRでbootstrap入力を追加したが、`docs/flux-bootstrap-runbook.md`の別承認でclusterへ適用するまでzero-Fluxのままである。
 - ESO/CSI/Nextcloudの全chart values、renderされた全child、image digest（ESO/CSIの
   全コンテナ）、Helm release ownership collisionは未証明。
 - `gcpsm-secret`は手動/外部プロビジョニングの前提で、dataをimportしない。
@@ -70,4 +69,4 @@ PR #36にはこれらの候補定義があるが、PR2では取り込まず、�
 
 CLI `flux resume`ではなく、別PRのGit commitで外側Flux Kustomizationと内側HelmReleaseを同じ変更でfalseにする。root reconciliationはGit上の`suspend: true`へ戻す。詳細なdependency順、expected diff、Ready条件、timeout/stop/rollbackは`docs/flux-pr2-activation-runbook.md`を参照する。ESO controller → ESO config → CSIの段階で、Nextcloudは完全parity証明まで対象外。
 
-このPRはFlux bootstrapではない。gotk-components、CRD/controllers、GitRepository bootstrapはrepoにないため、merge/applyだけでFluxがinstall/startすることも、このPRのままworkloadをreconcileすることもない。
+PR2自体はFlux bootstrapではない。後続のbootstrap preparation PRでgotk-componentsとsource/rootをGitへ追加しても、cluster writeを行わない限りFluxはinstall/startしない。bootstrap適用後も、この文書のpackage KustomizationとHelmReleaseは停止状態であり、workload activationは別PR・別承認である。

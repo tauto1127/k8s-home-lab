@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+flux_schema_root="${repo_root}/.github/schemas/flux/v2.9.3"
 render_root="$(mktemp -d)"
 sanitized_root="$(mktemp -d)"
 
@@ -61,6 +62,8 @@ kubeconform \
   -output json \
   -ignore-missing-schemas \
   -kubernetes-version 1.36.0 \
+  -schema-location default \
+  -schema-location "file://${flux_schema_root}" \
   "${rendered_files[@]}" > "${render_root}/kubeconform.json"
 
 ruby scripts/validate-kubeconform-policy.rb "${render_root}/kubeconform.json"

@@ -1,10 +1,10 @@
 # PR2 activation runbook template（準備PR）
 
-このtemplateは別PRのGit commitでのみ実行する。CLI `flux resume`は禁止。root reconciliationはGitの`suspend: true`へ戻す。PR2はFlux bootstrapではなく停止状態の準備であり、このPRのmerge/applyだけではFluxもworkloadも動かない。
+このtemplateはbootstrap完了後の別PRのGit commitでのみ実行する。CLI `flux resume`は禁止。root Kustomizationは継続してreconcileし、停止対象packageのGit上の`suspend: true`を維持する。PR2は停止状態の準備であり、bootstrapのGit定義と実際のcluster適用は`docs/flux-bootstrap-runbook.md`で別管理する。
 
 ## Preflight
 
-- [ ] Flux bootstrap、gotk-components、CRD/controller、GitRepositoryは別管理で導入済み
+- [ ] `docs/flux-bootstrap-runbook.md`の別承認でFlux bootstrapを適用し、CRD/controller、GitRepository、root KustomizationがReady
 - [ ] `flux-system/flux-system` GitRepository identityがpolicy allowlistと一致
 - [ ] read-only diffで既存Helm release、child resource、ownership collisionを確認
 - [ ] `suspend: true` / `prune: false`の現状と、今回のexpected diffを保存
@@ -25,5 +25,5 @@
 ## Failure policy
 
 - timeout、Ready false、unknown dependency/source、ownership collision、予期しないdiffはfail-closed。
-- CLI resumeで一時的に動かしてもGitの`suspend: true`が正であり、root reconciliationで再停止される。
+- CLI resumeは使わない。Git上のpackage `suspend: true`が正であり、activeなroot reconciliationが停止状態を維持する。
 - rollbackはactivation commitのrevert PRで行い、cluster writeをこの準備PRから実施しない。

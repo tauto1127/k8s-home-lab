@@ -1,6 +1,6 @@
 # Flux移行時のマニフェスト所有権
 
-最終確認日: 2026-09-05
+最終確認日: 2026-09-07
 
 この一覧は、どの定義をFluxの入力にできるかを示す。ここに記載したことは、
 Fluxが現在そのリソースを所有していることを意味しない。最初の移行PRで
@@ -54,6 +54,9 @@ PVC、PV、namespace、CRD、privileged bindingは、初回移行時に
 | `pv/pv-md0.yaml`, `pv/kustomization.yaml` | flux-candidate | static PV。最初は削除保護と`prune: false`が必要。 |
 | `pv/storageTest.yaml` | excluded | test Pod。liveには存在しない。 |
 | `pv/test-pvc.yaml` | excluded | test PVCは現在もBoundのため、cleanupは別途storageの判断が必要。 |
+| `clusters/home/flux-system/gotk-components.yaml` | bootstrap | Flux `v2.9.3`のCRD/controller/RBAC。生成物とSHA256をpolicyで固定し、cluster適用は別承認とする。 |
+| `clusters/home/flux-system/gotk-sync.yaml` | bootstrap | public GitRepositoryとactive root Kustomization。rootは`flux-system/`だけをcomposeし、`packages/`を直接所有しない。 |
+| `clusters/home/flux-system/sync.yaml` | migration-pending | 4つのpackage Kustomization定義。全て`suspend: true`、`prune: false`で、activationは別PRとする。 |
 
 すべてのraw `flux-candidate` packageには`kustomization.yaml`がある。Helm chartの
 templateは`helm template`後にのみ検証し、raw Kubernetes YAMLとしてはparseしない。

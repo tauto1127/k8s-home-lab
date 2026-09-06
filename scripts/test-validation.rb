@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require "fileutils"
+require "digest"
 require "json"
 require "open3"
 require "tmpdir"
@@ -15,7 +16,14 @@ File.write(FAKE_KUBECTL, <<~'SH')
   set -euo pipefail
   test "${1:-}" = kustomize
   package_dir="$2"
-  if test -f "$package_dir/rendered.yaml"; then
+  if test -f "$package_dir/render-mode"; then
+    mode="$(cat "$package_dir/render-mode")"
+    if test "$mode" = nonzero; then exit 42; fi
+    if test "$mode" = empty; then exit 0; fi
+  fi
+  if test -f "$package_dir/rendered.out"; then
+    cat "$package_dir/rendered.out"
+  elif test -f "$package_dir/rendered.yaml"; then
     cat "$package_dir/rendered.yaml"
   else
     first=1
@@ -52,6 +60,189 @@ def assert_failure(*command, env: {})
   stdout, stderr, status = run_command(*command, env: env)
   assert(!status.success?, "expected failure: #{command.join(' ')}\n#{stdout}\n#{stderr}")
   [stdout, stderr]
+end
+
+def write_flux_bootstrap_fixture(temporary_root, source_url: "https://github.com/tauto1127/k8s-home-lab", branch: "main", root_path: "./clusters/home", root_suspend: nil)
+  flux_system = File.join(temporary_root, "clusters/home/flux-system")
+  package = File.join(temporary_root, "clusters/home/packages/app")
+  FileUtils.mkdir_p(flux_system)
+  FileUtils.mkdir_p(package)
+  FileUtils.mkdir_p(File.join(temporary_root, ".github"))
+  schema_directory = File.join(temporary_root, ".github/schemas/flux/v2.9.3/v1.36.0-standalone-strict")
+  FileUtils.mkdir_p(schema_directory)
+  schema_content = "{}\n"
+  File.write(File.join(schema_directory, "gitrepository-source-v1.json"), schema_content)
+  schema_sha = Digest::SHA256.hexdigest(schema_content)
+
+  components = <<~YAML
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: flux-system
+    ---
+    apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      name: gitrepositories.source.toolkit.fluxcd.io
+    spec: {}
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      name: source-controller-flux-system
+    rules: []
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: source-controller-flux-system
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: source-controller-flux-system
+    subjects: []
+    ---
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: source-controller
+      namespace: flux-system
+    spec:
+      selector:
+        matchLabels:
+          app: source-controller
+      template:
+        metadata:
+          labels:
+            app: source-controller
+        spec:
+          containers:
+            - name: manager
+              image: ghcr.io/fluxcd/source-controller:v1.9.3
+  YAML
+  components_path = File.join(flux_system, "gotk-components.yaml")
+  File.write(components_path, components)
+  components_sha = Digest::SHA256.hexdigest(components)
+
+  root_suspend_line = root_suspend.nil? ? "" : "  suspend: #{root_suspend}\n"
+  git_repository = <<~YAML
+    apiVersion: source.toolkit.fluxcd.io/v1
+    kind: GitRepository
+    metadata:
+      name: flux-system
+      namespace: flux-system
+    spec:
+      interval: 1m0s
+      ref:
+        branch: #{branch}
+      url: #{source_url}
+  YAML
+  root_kustomization = <<~YAML
+    apiVersion: kustomize.toolkit.fluxcd.io/v1
+    kind: Kustomization
+    metadata:
+      name: flux-system
+      namespace: flux-system
+    spec:
+      interval: 10m0s
+      path: #{root_path}
+      prune: false
+    #{root_suspend_line}  sourceRef:
+        kind: GitRepository
+        name: flux-system
+  YAML
+  File.write(File.join(flux_system, "gotk-sync.yaml"), "#{git_repository}---\n#{root_kustomization}")
+  File.write(File.join(flux_system, "sync.yaml"), <<~YAML)
+    apiVersion: kustomize.toolkit.fluxcd.io/v1
+    kind: Kustomization
+    metadata:
+      name: app
+      namespace: flux-system
+    spec:
+      interval: 30m
+      path: ./clusters/home/packages/app
+      prune: false
+      suspend: true
+      sourceRef:
+        kind: GitRepository
+        name: flux-system
+  YAML
+  File.write(File.join(flux_system, "kustomization.yaml"), <<~YAML)
+    apiVersion: kustomize.config.k8s.io/v1beta1
+    kind: Kustomization
+    resources:
+      - gotk-components.yaml
+      - gotk-sync.yaml
+      - sync.yaml
+  YAML
+  File.write(File.join(temporary_root, "clusters/home/kustomization.yaml"), <<~YAML)
+    apiVersion: kustomize.config.k8s.io/v1beta1
+    kind: Kustomization
+    resources:
+      - flux-system
+  YAML
+  File.write(File.join(package, "kustomization.yaml"), <<~YAML)
+    apiVersion: kustomize.config.k8s.io/v1beta1
+    kind: Kustomization
+    resources:
+      - resource.yaml
+  YAML
+  File.write(File.join(package, "resource.yaml"), <<~YAML)
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: app
+      namespace: default
+  YAML
+
+  # The unit-test renderer emits the root composition without recursively parsing
+  # Kustomize. Production validation still uses the real pinned kubectl binary.
+  File.write(
+    File.join(temporary_root, "clusters/home/rendered.out"),
+    "#{components}---\n#{git_repository}---\n#{root_kustomization}---\n#{File.read(File.join(flux_system, "sync.yaml"))}"
+  )
+
+  File.write(File.join(temporary_root, ".github/manifest-policy.yaml"), <<~YAML)
+    bootstrapManagedSources: []
+    fluxBootstrap:
+      version: v2.9.3
+      releaseUrl: https://github.com/fluxcd/flux2/releases/tag/v2.9.3
+      components:
+        path: clusters/home/flux-system/gotk-components.yaml
+        sourceUrl: https://github.com/fluxcd/flux2/releases/download/v2.9.3/install.yaml
+        sourceSha256: aa0bd71dbc4bed916b9cafa850c4618f341c74c580832c613dca04a067ee7281
+        sha256: #{components_sha}
+        controllers:
+          - name: source-controller
+            image: ghcr.io/fluxcd/source-controller:v1.9.3
+        requiredCRDs:
+          - gitrepositories.source.toolkit.fluxcd.io
+        requiredClusterRoles:
+          - source-controller-flux-system
+        requiredClusterRoleBindings:
+          - source-controller-flux-system
+      schemas:
+        sourceUrl: https://github.com/fluxcd/flux2/releases/download/v2.9.3/crd-schemas.tar.gz
+        sourceSha256: 91a555810a37a61b021d0a7334d5623783d267a7ecbbff7d5a00e8c7df9c0d33
+        directory: .github/schemas/flux/v2.9.3/v1.36.0-standalone-strict
+        files:
+          - path: gitrepository-source-v1.json
+            sha256: #{schema_sha}
+      source:
+        apiVersion: source.toolkit.fluxcd.io/v1
+        kind: GitRepository
+        namespace: flux-system
+        name: flux-system
+        url: https://github.com/tauto1127/k8s-home-lab
+        branch: main
+      root:
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        namespace: flux-system
+        name: flux-system
+        path: ./clusters/home
+        prune: false
+  YAML
 end
 
 require_relative "manifest-policy-helpers"
@@ -659,6 +850,102 @@ Dir.mktmpdir("flux-order-and-source-validation-test") do |temporary_root|
   YAML
   stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
   assert((stdout + stderr).include?("dependency cycle"), "two-node dependency cycle was accepted")
+end
+
+Dir.mktmpdir("flux-bootstrap-unexpected-source-test") do |temporary_root|
+  write_flux_bootstrap_fixture(
+    temporary_root,
+    source_url: "https://github.com/example/unexpected",
+    root_suspend: true
+  )
+  stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+  assert((stdout + stderr).include?("bootstrap GitRepository url must be https://github.com/tauto1127/k8s-home-lab"), "unexpected bootstrap repository URL was not rejected exactly")
+end
+
+Dir.mktmpdir("flux-bootstrap-validation-test") do |temporary_root|
+  write_flux_bootstrap_fixture(temporary_root)
+  validator = File.join(ROOT, "scripts/validate-flux-ownership.rb")
+  assert_success("ruby", validator, temporary_root)
+
+  sync_path = File.join(temporary_root, "clusters/home/flux-system/gotk-sync.yaml")
+  original_sync = File.read(sync_path)
+  policy_path = File.join(temporary_root, ".github/manifest-policy.yaml")
+  original_policy = File.read(policy_path)
+  package_sync_path = File.join(temporary_root, "clusters/home/flux-system/sync.yaml")
+  original_package_sync = File.read(package_sync_path)
+  root_render_path = File.join(temporary_root, "clusters/home/rendered.out")
+  original_root_render = File.read(root_render_path)
+
+  File.write(policy_path, original_policy.sub("version: v2.9.3", "version: latest"))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("fluxBootstrap.version must be an exact vMAJOR.MINOR.PATCH"), "floating Flux version was accepted")
+  File.write(policy_path, original_policy)
+
+  File.write(policy_path, original_policy.sub("releases/download/v2.9.3/install.yaml", "releases/latest/download/install.yaml"))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("components sourceUrl must be pinned to v2.9.3"), "floating Flux components URL was accepted")
+  File.write(policy_path, original_policy)
+
+  File.write(policy_path, original_policy.sub("url: https://github.com/tauto1127/k8s-home-lab", "url: https://github.com/example/unexpected"))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("fluxBootstrap.source.url must be"), "bootstrap policy accepted an unexpected repository URL")
+  File.write(policy_path, original_policy)
+
+  File.write(sync_path, original_sync.sub("branch: main", "branch: unsafe"))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("bootstrap GitRepository branch must be main"), "unexpected bootstrap branch was accepted")
+  File.write(sync_path, original_sync)
+
+  File.write(sync_path, original_sync.sub("path: ./clusters/home", "path: ./clusters/other"))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("bootstrap root path must be ./clusters/home"), "unexpected bootstrap path was accepted")
+  File.write(sync_path, original_sync)
+
+  File.write(File.join(temporary_root, "clusters/home/flux-system/gotk-components.yaml"), "#{File.read(File.join(temporary_root, "clusters/home/flux-system/gotk-components.yaml"))}\n# changed\n")
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("gotk-components checksum mismatch"), "changed bootstrap components were accepted")
+  write_flux_bootstrap_fixture(temporary_root)
+
+  File.write(package_sync_path, original_package_sync.sub("suspend: true", "suspend: false"))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("Flux Kustomization app: suspend must be true"), "active workload Kustomization was accepted")
+  File.write(package_sync_path, original_package_sync.sub("prune: false", "prune: true"))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("Flux Kustomization app: prune must be false"), "pruning workload Kustomization was accepted")
+  File.write(package_sync_path, original_package_sync)
+
+  duplicate = <<~YAML
+    ---
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: app
+      namespace: default
+  YAML
+  File.write(root_render_path, "#{original_root_render}#{duplicate}")
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("duplicate Flux-owned object"), "bootstrap root duplicate ownership was accepted")
+  File.write(root_render_path, original_root_render)
+
+  root_kustomization_path = File.join(temporary_root, "clusters/home/kustomization.yaml")
+  original_root_kustomization = File.read(root_kustomization_path)
+  File.write(root_kustomization_path, original_root_kustomization.sub("- flux-system", "- ."))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("Kustomize composition cycle"), "recursive bootstrap root was accepted")
+  File.write(root_kustomization_path, original_root_kustomization)
+
+  File.write(File.join(temporary_root, "clusters/home/render-mode"), "nonzero\n")
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("Kustomize render failed"), "non-zero bootstrap renderer was accepted")
+  File.write(File.join(temporary_root, "clusters/home/render-mode"), "empty\n")
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("Kustomize render was empty"), "empty bootstrap renderer was accepted")
+  FileUtils.rm_f(File.join(temporary_root, "clusters/home/render-mode"))
+  stdout, stderr = assert_failure(
+    "ruby", validator, temporary_root,
+    env: {"FLUX_OWNERSHIP_KUBECTL" => File.join(temporary_root, "missing-kubectl")}
+  )
+  assert((stdout + stderr).include?("Kustomize renderer is unavailable"), "unavailable bootstrap renderer was accepted")
 end
 
 puts "Validation fixtures passed."
