@@ -44,6 +44,18 @@ assert(sensitive_environment_name?("DATABASE_URL"), "database URL was not classi
 assert(!sensitive_environment_name?("ALLOW_EMPTY_PASSWORD"), "non-secret password flag was classified")
 assert(!sensitive_environment_name?("CLUSTER_NAME"), "non-sensitive env name was classified")
 
+sanitized_annotations = {
+  "annotations" => {
+    "checksum/secret" => "SECRET_CHECKSUM",
+    "checksum-secrets" => "SECRET_CHECKSUMS",
+    "checksum/configmap" => "CONFIGMAP_CHECKSUM"
+  }
+}
+redact_secret_checksums!(sanitized_annotations)
+assert(sanitized_annotations["annotations"]["checksum/secret"] == "REDACTED", "Secret checksum annotation was not redacted")
+assert(sanitized_annotations["annotations"]["checksum-secrets"] == "REDACTED", "plural Secret checksum annotation was not redacted")
+assert(sanitized_annotations["annotations"]["checksum/configmap"] == "CONFIGMAP_CHECKSUM", "non-Secret checksum annotation was redacted")
+
 literal_names = []
 each_sensitive_environment_literal(
   "extraEnv" => {
@@ -238,6 +250,7 @@ Dir.mktmpdir("kustomization-roots-test") do |temporary_root|
   FileUtils.mkdir_p(File.join(temporary_root, "standalone"))
   FileUtils.mkdir_p(File.join(temporary_root, "alternate"))
   FileUtils.mkdir_p(File.join(temporary_root, ".hidden"))
+  outside_root = Dir.mktmpdir("outside-kustomization")
   File.write(
     File.join(temporary_root, ".hidden/kustomization.yaml"),
     "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: []\n"
@@ -258,13 +271,21 @@ Dir.mktmpdir("kustomization-roots-test") do |temporary_root|
     File.join(temporary_root, "alternate/kustomization.yml"),
     "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: []\n"
   )
+  FileUtils.mkdir_p(File.join(outside_root, "escaped"))
+  File.write(
+    File.join(outside_root, "escaped/kustomization.yaml"),
+    "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: []\n"
+  )
+  File.symlink(File.join(outside_root, "escaped"), File.join(temporary_root, "escaped"))
   stdout, stderr, status = run_command("ruby", "scripts/discover-kustomization-roots.rb", temporary_root)
+  FileUtils.remove_entry(outside_root)
   assert(status.success?, "kustomization root discovery failed: #{stderr}")
   roots = stdout.lines.map(&:chomp)
   assert(
     roots == [".hidden/kustomization.yaml", "alternate/kustomization.yml", "parent/kustomization.yaml", "standalone/kustomization.yaml"],
     "Kustomization variants or nested package discovery are incorrect: #{roots.inspect}"
   )
+  assert(!roots.any? { |path| path.start_with?("../") || path.start_with?("escaped") }, "external symlinked Kustomization escaped root discovery")
 end
 
 puts "Validation fixtures passed."

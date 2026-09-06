@@ -144,7 +144,8 @@ module ManifestPolicyHelpers
       annotations = value["annotations"]
       if annotations.is_a?(Hash)
         annotations.each_key do |key|
-          annotations[key] = "REDACTED" if key.to_s.match?(%r{(?:\A|/)checksum/secret\z}i)
+          secret_checksum = key.to_s.match?(%r{(?:\A|/)checksum/(?:secret|secrets)\z}i) || key.to_s.match?(/\Achecksum-secrets\z/i)
+          annotations[key] = "REDACTED" if secret_checksum
         end
       end
       value.each_value { |child| redact_secret_checksums!(child) }

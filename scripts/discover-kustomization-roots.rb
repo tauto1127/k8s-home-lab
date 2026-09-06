@@ -22,7 +22,15 @@ end
 
 kustomizations = KUSTOMIZATION_FILENAMES.flat_map do |filename|
   Dir.glob(root.join("**", filename).to_s, File::FNM_DOTMATCH)
-end.map { |path| Pathname.new(path).realpath }.uniq.sort_by(&:to_s)
+end.filter_map do |path|
+  pathname = Pathname.new(path)
+  next if pathname.symlink?
+
+  realpath = pathname.realpath
+  next unless realpath.to_s.start_with?("#{root}/")
+
+  realpath
+end.uniq.sort_by(&:to_s)
 referenced_package_dirs = Set.new
 
 kustomizations.each do |kustomization|
@@ -32,6 +40,11 @@ kustomizations.each do |kustomization|
     next unless resource.is_a?(String) && !resource.match?(%r{\Ahttps?://})
 
     expanded = base.join(resource).cleanpath
+    next unless expanded.exist?
+
+    realpath = expanded.realpath
+    next unless realpath.to_s.start_with?("#{root}/")
+
     candidate = if expanded.directory?
                   nested = kustomization_in(expanded)
                   nested && Pathname.new(nested)
