@@ -9,6 +9,7 @@ require "open3"
 require "rubygems/package"
 require "stringio"
 require "tmpdir"
+require "yaml"
 require "zlib"
 
 def build_fixture_schema_archive
@@ -1033,6 +1034,61 @@ Dir.mktmpdir("flux-bootstrap-validation-test") do |temporary_root|
   stdout, stderr = assert_failure("ruby", validator, temporary_root)
   assert((stdout + stderr).include?("Flux Kustomization app: prune must be false"), "pruning workload Kustomization was accepted")
   File.write(package_sync_path, original_package_sync)
+
+  hidden_package = File.join(temporary_root, "clusters/home/packages/hidden")
+  FileUtils.mkdir_p(hidden_package)
+  File.write(File.join(hidden_package, "kustomization.yaml"), <<~YAML)
+    apiVersion: kustomize.config.k8s.io/v1beta1
+    kind: Kustomization
+    resources:
+      - resource.yaml
+  YAML
+  File.write(File.join(hidden_package, "resource.yaml"), <<~YAML)
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: hidden
+      namespace: default
+  YAML
+  hidden_flux = <<~YAML
+    apiVersion: kustomize.toolkit.fluxcd.io/v1
+    kind: Kustomization
+    metadata:
+      name: hidden
+      namespace: flux-system
+    spec:
+      path: ./clusters/home/packages/hidden
+      prune: false
+      suspend: false
+      sourceRef:
+        kind: GitRepository
+        name: flux-system
+  YAML
+
+  hidden_list_path = File.join(temporary_root, "clusters/home/flux-system/hidden-list.yaml")
+  hidden_list_item = hidden_flux.lines.each_with_index.map { |line, index| index.zero? ? "  - #{line}" : "    #{line}" }.join
+  File.write(hidden_list_path, "apiVersion: v1\nkind: List\nitems:\n#{hidden_list_item}")
+  File.write(root_render_path, "#{original_root_render}---\n#{hidden_flux}")
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("Flux Kustomization hidden: suspend must be true"), "active Flux Kustomization nested in List.items was not reported:\n#{stdout}\n#{stderr}")
+  FileUtils.rm_f(hidden_list_path)
+  File.write(root_render_path, original_root_render)
+
+  hidden_json_path = File.join(temporary_root, "clusters/home/flux-system/hidden.json")
+  File.write(hidden_json_path, JSON.pretty_generate(YAML.safe_load(hidden_flux)))
+  File.write(root_render_path, "#{original_root_render}---\n#{hidden_flux}")
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("Flux Kustomization hidden: suspend must be true"), "active Flux Kustomization declared as JSON was accepted")
+  FileUtils.rm_f(hidden_json_path)
+  File.write(root_render_path, original_root_render)
+
+  outside_flux_root = File.join(temporary_root, "shared")
+  FileUtils.mkdir_p(outside_flux_root)
+  File.write(File.join(outside_flux_root, "hidden-flux.yaml"), hidden_flux)
+  File.write(root_render_path, "#{original_root_render}---\n#{hidden_flux}")
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("rendered Flux Kustomization is not declared under clusters"), "Flux Kustomization rendered from outside clusters was accepted")
+  File.write(root_render_path, original_root_render)
 
   duplicate = <<~YAML
     ---

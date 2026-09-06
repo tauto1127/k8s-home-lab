@@ -39,9 +39,9 @@ EXPECTED_BOOTSTRAP_ROOT = {
 
 # Parse the YAML stream without permitting Ruby objects or aliases.
 def yaml_documents(content, source)
-  content.split(/^---[ \t]*(?:#.*)?$\n?/).filter_map do |document|
+  content.split(/^---[ \t]*(?:#.*)?$\n?/).each_with_object([]) do |document, documents|
     next if document.strip.empty?
-    YAML.safe_load(document, permitted_classes: [], permitted_symbols: [], aliases: false)
+    documents << YAML.safe_load(document, permitted_classes: [], permitted_symbols: [], aliases: false)
   end
 rescue Psych::Exception => e
   raise "#{source}: YAML parse failed: #{e.message.lines.first.strip}"
@@ -217,7 +217,8 @@ def component_inventory(documents)
       when "Deployment"
         images = Array(resource.dig("spec", "template", "spec", "initContainers"))
           .concat(Array(resource.dig("spec", "template", "spec", "containers")))
-          .filter_map { |container| container.is_a?(Hash) ? container["image"] : nil }
+          .map { |container| container.is_a?(Hash) ? container["image"] : nil }
+          .compact
         inventory["controllers"][name] = images
       when "CustomResourceDefinition"
         inventory["crds"] << name
@@ -402,11 +403,13 @@ allowed_bootstrap_sources = Set.new(Array(policy[BOOTSTRAP_SOURCE_POLICY_KEY]).m
   [entry.fetch("apiVersion"), entry.fetch("kind"), entry.fetch("namespace").to_s, entry.fetch("name")].join("/")
 end)
 
-flux_files = root.join("clusters").glob("**/*.{yaml,yml,Kustomization}").select(&:file?)
+flux_files = root.join("clusters").glob("**/*").select do |path|
+  path.file? && (KUSTOMIZATION_FILENAMES.include?(path.basename.to_s) || %w[.yaml .yml .json].include?(path.extname.downcase))
+end
 flux_entries = flux_files.flat_map do |path|
-  yaml_file_documents(path).filter_map do |doc|
+  yaml_file_documents(path).flat_map { |document| resource_documents(document) }.each_with_object([]) do |doc, entries|
     next unless doc.is_a?(Hash) && doc["apiVersion"] == "kustomize.toolkit.fluxcd.io/v1" && doc["kind"] == "Kustomization"
-    [repository_path(root, path, "Flux input"), doc]
+    entries << [repository_path(root, path, "Flux input"), doc]
   end
 end
 raise "no Flux Kustomizations found" if flux_entries.empty?
@@ -414,10 +417,10 @@ raise "no Flux Kustomizations found" if flux_entries.empty?
 if bootstrap
   source_policy = bootstrap.fetch("source")
   source_inputs = flux_files.flat_map do |path|
-    yaml_file_documents(path).filter_map do |document|
+    yaml_file_documents(path).flat_map { |document| resource_documents(document) }.each_with_object([]) do |document, entries|
       next unless document.is_a?(Hash) && document["apiVersion"] == source_policy["apiVersion"] && document["kind"] == source_policy["kind"]
       next unless required_identity(document, path.to_s) == bootstrap_source_id
-      [path, document]
+      entries << [path, document]
     end
   end
   failures << "bootstrap GitRepository must be declared exactly once in Git; found #{source_inputs.length}" unless source_inputs.length == 1
@@ -429,6 +432,7 @@ if bootstrap
 end
 
 seen_flux_identities = {}
+declared_flux_resources = {}
 flux_by_identity = {}
 package_objects = {}
 
@@ -441,6 +445,7 @@ flux_entries.each do |source_path, resource|
   flux_id = required_identity(resource, source_path.to_s)
   raise "duplicate Flux Kustomization #{flux_id}: #{seen_flux_identities[flux_id]} and #{source_path}" if seen_flux_identities.key?(flux_id)
   seen_flux_identities[flux_id] = source_path
+  declared_flux_resources[flux_id] = resource
   flux_by_identity[namespaced_identity("Kustomization", namespace, name)] = resource
 
   spec = resource["spec"]
@@ -465,6 +470,23 @@ flux_entries.each do |source_path, resource|
 end
 failures << "bootstrap root Kustomization is missing: #{bootstrap_root_id}" if bootstrap_root_id && !seen_flux_identities.key?(bootstrap_root_id)
 
+# Every rendered Flux Kustomization must have an identical declaration under clusters/.
+# This rejects Flux CRs smuggled through external package resources while still allowing
+# the bootstrap root to render its own reviewed declarations.
+package_objects.each do |owner, entries|
+  entries.each do |path, resource|
+    next unless resource.is_a?(Hash) && resource["apiVersion"] == "kustomize.toolkit.fluxcd.io/v1" && resource["kind"] == "Kustomization"
+
+    flux_id = required_identity(resource, path.to_s)
+    declared = declared_flux_resources[flux_id]
+    if declared.nil?
+      failures << "rendered Flux Kustomization is not declared under clusters: #{flux_id} (owner #{owner})"
+    elsif declared != resource
+      failures << "rendered Flux Kustomization differs from its declaration under clusters: #{flux_id} (owner #{owner})"
+    end
+  end
+end
+
 # Collect declared GitRepositories from the rendered package output plus the explicit
 # bootstrap allowlist before validating any Flux sourceRef.
 declared_git_repositories = Set.new
@@ -477,9 +499,9 @@ end
 
 if bootstrap
   root_entries = package_objects.fetch(bootstrap_root_owner, [])
-  root_identities = root_entries.filter_map do |path, document|
+  root_identities = root_entries.each_with_object([]) do |(path, document), identities|
     next unless document.is_a?(Hash)
-    required_identity(document, path.to_s)
+    identities << required_identity(document, path.to_s)
   end
   missing_components = bootstrap_component_identities - root_identities.to_set
   if missing_components.any?

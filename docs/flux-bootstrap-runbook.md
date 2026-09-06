@@ -48,7 +48,7 @@
    ssh kube 'kubectl diff -f -' < clusters/home/flux-system/gotk-sync.yaml
    ```
 
-5. `cluster-reconciler-flux-system` ClusterRoleBindingが、公式生成物どおり`cluster-admin`を`kustomize-controller`と`helm-controller`へ付与することを承認者が明示確認する。このbootstrap PRはleast privilegeを証明しない。workload activation前に、Flux multi-tenancy lockdownを採用するか、single-tenant clusterとしてこの権限を継続する判断を別レビューで明示承認する。
+5. `cluster-reconciler-flux-system` ClusterRoleBindingが、公式生成物どおり`cluster-admin`を`kustomize-controller`と`helm-controller`へ付与することを承認者が明示確認する。このbootstrap PRはleast privilegeを証明しない。workload activation前に、Flux multi-tenancy lockdownを採用するか、single-tenant clusterとしてこの権限を継続する判断を別レビューで明示承認する。また、生成bundleの固定と再生成一致はcontroller image tag自体をimmutableにしないため、tag trustを受け入れるか、別途digest/signatureを検証する判断も適用承認に含める。GitRepositoryはmutableな`main`を追従するため、repository write権限とbranch protectionも同じ承認で確認する。
 
 期待diffは次だけである。
 
@@ -87,13 +87,22 @@ ssh kube 'kubectl wait -n flux-system --for=condition=Ready kustomization/flux-s
 - rootのinventoryに`clusters/home/packages/*`のworkload objectが直接現れる
 - 4つのpackage Kustomizationの停止状態が崩れる、またはpackage由来のHelmReleaseが1つでも作成される
 - Nextcloudの外側activation gateがcluster上で欠ける、またはGit上の外側・内側gateのどちらかが欠ける
-- 公式生成物の`cluster-admin`付与範囲を承認者が確認していない
+- 公式生成物の`cluster-admin`付与範囲、controller image tagの可変性、public repositoryの`main`追従リスクを承認者が確認していない
 - 認証、source取得、RBAC、admission、ownership collisionのerrorが出る
 
-緊急停止が必要な場合、次のpatchはcluster writeであり、別の明示承認後にだけ使う。rootを停止した後もpackageはGit上の`suspend: true`を正とする。
+緊急停止が必要な場合、最初に次のread-only確認でroot、4 package、存在するHelmReleaseの状態を限定表示する。rootだけを停止しても、既に有効なchild reconciliationは停止しない。
+
+```bash
+ssh kube 'kubectl get kustomization -n flux-system -o custom-columns=NAME:.metadata.name,SUSPEND:.spec.suspend,READY:.status.conditions[0].status'
+ssh kube 'kubectl get helmrelease -A -o custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name,SUSPEND:.spec.suspend'
+```
+
+次のpatchはすべてcluster writeであり、その時点の別の明示承認後にだけ使う。rootを先に停止し、4 packageを個別に停止した後、存在する既知のHelmReleaseも停止する。途中失敗は後続を止め、状態を再確認する。Git上の`suspend: true`を正とし、緊急patchを恒久設定にしない。
 
 ```bash
 ssh kube 'kubectl patch -n flux-system kustomization flux-system --type=merge -p '\''{"spec":{"suspend":true}}'\'''
+ssh kube 'for name in eso-controller eso-config csi-secrets-store nextcloud; do kubectl patch -n flux-system kustomization "$name" --type=merge -p '\''{"spec":{"suspend":true}}'\'' || exit 1; done'
+ssh kube 'for target in external-secrets/external-secrets kube-system/csi-secrets-store nextcloud/nextcloud; do namespace=${target%/*}; name=${target#*/}; if kubectl get -n "$namespace" helmrelease "$name" -o name >/dev/null 2>&1; then kubectl patch -n "$namespace" helmrelease "$name" --type=merge -p '\''{"spec":{"suspend":true}}'\'' || exit 1; fi; done'
 ```
 
 ## Post-install verification（値を限定したread-only確認）

@@ -22,14 +22,14 @@ end
 
 kustomizations = KUSTOMIZATION_FILENAMES.flat_map do |filename|
   Dir.glob(root.join("**", filename).to_s, File::FNM_DOTMATCH)
-end.filter_map do |path|
+end.each_with_object([]) do |path, entries|
   pathname = Pathname.new(path)
   next if pathname.symlink?
 
   realpath = pathname.realpath
   next unless realpath.to_s.start_with?("#{root}/")
 
-  realpath
+  entries << realpath
 end.uniq.sort_by(&:to_s)
 referenced_package_dirs = Set.new
 

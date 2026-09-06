@@ -1,7 +1,7 @@
 # Flux PR2 read-only Git/live比較
 
 確認日: 2026-09-06
-対象: `chore/flux-pr2-ownership-boundaries`
+対象: PR #43でmerge済みの準備定義（旧branch `chore/flux-pr2-ownership-boundaries`）
 
 この比較は、Gitのdesired定義をrender/静的検査し、`ssh takuto1127@192.168.11.28`
 から選択した非機密フィールドだけを読み取った結果である。Secret value、raw Secret
