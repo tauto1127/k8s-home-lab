@@ -9,7 +9,11 @@ root = Pathname.new(ARGV.fetch(0, File.expand_path("..", __dir__))).realpath
 failures = []
 
 def yaml_documents(path)
-  YAML.load_stream(File.read(path), permitted_classes: [], aliases: false).compact
+  File.read(path).split(/^---[ \t]*(?:#.*)?$\n?/).filter_map do |document|
+    next if document.strip.empty?
+
+    YAML.safe_load(document, permitted_classes: [], permitted_symbols: [], aliases: false)
+  end
 rescue Psych::Exception => e
   raise "#{path}: YAML parse failed: #{e.message.lines.first.strip}"
 end
