@@ -32,6 +32,15 @@ jobs:
       - name: Resolve tool checksums
         run: aqua install
 
+      - name: Validate pre-commit configuration
+        run: aqua exec -- pre-commit validate-config
+
+      - name: Run pre-commit checks
+        run: aqua exec -- pre-commit run --all-files
+
+      - name: Run pre-commit regression test
+        run: aqua exec -- ruby scripts/test-pre-commit.rb
+
       - name: Run validator regression fixtures
         run: ruby scripts/test-validation.rb
 

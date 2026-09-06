@@ -8,3 +8,4 @@ packages:
   - name: helmfile/helmfile@v1.7.4
   - name: yannh/kubeconform@v0.8.0
   - name: gitleaks/gitleaks@v8.30.1
+  - name: pre-commit/pre-commit@v4.6.2
