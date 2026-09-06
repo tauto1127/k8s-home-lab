@@ -40,6 +40,100 @@ renderedFloatingImages:
 
 renderedClusterAdminBindings:
   - namespace: default
+    kind: ClusterRoleBinding
     name: portainer
     sha256: 97a6571c1d2d507f100fdf34bcaf696ee025645ec4f022b0092ebd8d34c94ec2
     reason: Existing Portainer chart binding; rendered roleRef and subjects must remain identical to live until least privilege is designed.
+
+allowedMissingSchemas:
+  - apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    reason: Kubeconform has no local schema for the CRD object in this validation baseline.
+  - apiVersion: barmancloud.cnpg.io/v1
+    kind: ObjectStore
+    reason: CloudNativePG Barman plugin CRD is validated by the operator/server gate.
+  - apiVersion: cert-manager.io/v1
+    kind: Certificate
+    reason: cert-manager CRD is validated by the operator/server gate.
+  - apiVersion: cert-manager.io/v1
+    kind: Issuer
+    reason: cert-manager CRD is validated by the operator/server gate.
+  - apiVersion: collectors.grafana.com/v1alpha1
+    kind: Alloy
+    reason: Grafana Alloy CRD is validated by the operator/server gate.
+  - apiVersion: external-secrets.io/v1beta1
+    kind: ClusterSecretStore
+    reason: External Secrets Operator CRD is validated by the operator/server gate.
+  - apiVersion: external-secrets.io/v1beta1
+    kind: ExternalSecret
+    reason: External Secrets Operator CRD is validated by the operator/server gate.
+  - apiVersion: metallb.io/v1beta1
+    kind: IPAddressPool
+    reason: MetalLB CRD is validated by the operator/server gate.
+  - apiVersion: metallb.io/v1beta1
+    kind: L2Advertisement
+    reason: MetalLB CRD is validated by the operator/server gate.
+  - apiVersion: postgresql.cnpg.io/v1
+    kind: Cluster
+    reason: CloudNativePG CRD is validated by the operator/server gate.
+  - apiVersion: postgresql.cnpg.io/v1
+    kind: ScheduledBackup
+    reason: CloudNativePG CRD is validated by the operator/server gate.
+
+remoteKustomizeResources:
+  - url: https://github.com/cloudnative-pg/plugin-barman-cloud/releases/download/v0.15.0/manifest.yaml
+    sha256: 1c483eae12a7424ad28ac66bdfee771b510ee8e234cb8756c3ade7254cef2fad
+    reason: Pin the Barman Cloud plugin manifest bytes used by Kustomize.
+
+renderedSecretExceptions:
+  - sourcePath: apps/dashboard/helmfile.yaml
+    namespace: default
+    kind: Secret
+    name: kubernetes-dashboard-csrf
+    allowedKeys:
+      - private.key
+    reason: The pinned Dashboard chart generates its CSRF signing key during Helm rendering; replace the retired chart before Flux migration.
+  - sourcePath: apps/dashboard/helmfile.yaml
+    namespace: kong
+    kind: Secret
+    name: kong-kong-validation-webhook-ca-keypair
+    allowedKeys:
+      - tls.crt
+      - tls.key
+    reason: The pinned Kong chart generates a CA keypair for its validation webhook during Helm rendering.
+  - sourcePath: apps/dashboard/helmfile.yaml
+    namespace: kong
+    kind: Secret
+    name: kong-kong-validation-webhook-keypair
+    allowedKeys:
+      - tls.crt
+      - tls.key
+    reason: The pinned Kong chart generates a serving keypair for its validation webhook during Helm rendering.
+  - sourcePath: middlewares/grafana/helmfile.yaml
+    namespace: grafana
+    kind: Secret
+    name: grafana-cloud-logs-grafana-k8s-monitoring
+    allowedKeys:
+      - username
+    reason: The pinned Grafana chart stores a non-secret connection username beside externally sourced credentials.
+  - sourcePath: middlewares/grafana/helmfile.yaml
+    namespace: grafana
+    kind: Secret
+    name: grafana-cloud-metrics-grafana-k8s-monitoring
+    allowedKeys:
+      - username
+    reason: The pinned Grafana chart stores a non-secret connection username beside externally sourced credentials.
+  - sourcePath: middlewares/grafana/helmfile.yaml
+    namespace: grafana
+    kind: Secret
+    name: grafana-cloud-otlp-endpoint-grafana-k8s-monitoring
+    allowedKeys:
+      - username
+    reason: The pinned Grafana chart stores a non-secret connection username beside externally sourced credentials.
+  - sourcePath: middlewares/pg-operator/kustomization.yaml
+    namespace: pg-operator
+    kind: Secret
+    name: plugin-barman-cloud-2b4mtt7m69
+    allowedKeys:
+      - SIDECAR_IMAGE
+    reason: Upstream Barman Cloud plugin uses a generated non-credential Secret for its sidecar image configuration.

@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: env-list
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      app: env-list
+  template:
+    metadata:
+      labels:
+        app: env-list
+    spec:
+      containers:
+        - name: app
+          image: example.invalid/app@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          env:
+            - name: AWS_SECRET_ACCESS_KEY
+              value: REDACTED
+            - name: CLIENT_SECRET
+              value: REDACTED
+            - name: SECRET_KEY_BASE
+              value: REDACTED
+            - name: DATABASE_URL
+              value: REDACTED
