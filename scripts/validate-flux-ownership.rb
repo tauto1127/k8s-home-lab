@@ -4,20 +4,44 @@
 require "open3"
 require "pathname"
 require "set"
+require "digest"
+require "rubygems/package"
+require "stringio"
 require "yaml"
+require "zlib"
 
 root = Pathname.new(ARGV.fetch(0, File.expand_path("..", __dir__))).realpath
 failures = []
 
 BOOTSTRAP_SOURCE_POLICY_KEY = "bootstrapManagedSources"
+FLUX_BOOTSTRAP_POLICY_KEY = "fluxBootstrap"
 ACTIVATION_BLOCKED = "flux.takutk.com/activation-blocked"
 KUBECTL = ENV.fetch("FLUX_OWNERSHIP_KUBECTL", "kubectl")
+CURL = ENV.fetch("FLUX_OWNERSHIP_CURL", "curl")
+FLUX = ENV.fetch("FLUX_OWNERSHIP_FLUX", "flux")
+KUSTOMIZATION_FILENAMES = %w[kustomization.yaml kustomization.yml Kustomization].freeze
+EXPECTED_BOOTSTRAP_SOURCE = {
+  "apiVersion" => "source.toolkit.fluxcd.io/v1",
+  "kind" => "GitRepository",
+  "namespace" => "flux-system",
+  "name" => "flux-system",
+  "url" => "https://github.com/tauto1127/k8s-home-lab",
+  "branch" => "main"
+}.freeze
+EXPECTED_BOOTSTRAP_ROOT = {
+  "apiVersion" => "kustomize.toolkit.fluxcd.io/v1",
+  "kind" => "Kustomization",
+  "namespace" => "flux-system",
+  "name" => "flux-system",
+  "path" => "./clusters/home",
+  "prune" => false
+}.freeze
 
 # Parse the YAML stream without permitting Ruby objects or aliases.
 def yaml_documents(content, source)
-  content.split(/^---[ \t]*(?:#.*)?$\n?/).filter_map do |document|
+  content.split(/^---[ \t]*(?:#.*)?$\n?/).each_with_object([]) do |document, documents|
     next if document.strip.empty?
-    YAML.safe_load(document, permitted_classes: [], permitted_symbols: [], aliases: false)
+    documents << YAML.safe_load(document, permitted_classes: [], permitted_symbols: [], aliases: false)
   end
 rescue Psych::Exception => e
   raise "#{source}: YAML parse failed: #{e.message.lines.first.strip}"
@@ -37,6 +61,73 @@ def repository_path(root, path, description)
   resolved
 rescue Errno::ENOENT
   raise "#{description}: path is missing: #{path}"
+end
+
+def verify_remote_sha256!(url, expected_sha, description, failures)
+  stdout, _stderr, status = Open3.capture3(
+    CURL,
+    "--fail",
+    "--silent",
+    "--show-error",
+    "--location",
+    "--proto", "=https",
+    "--proto-redir", "=https",
+    "--tlsv1.2",
+    "--connect-timeout", "10",
+    "--max-time", "60",
+    "--", url
+  )
+  raise "#{description}: upstream artifact fetch failed" unless status.success?
+
+  actual_sha = Digest::SHA256.hexdigest(stdout.b)
+  unless actual_sha == expected_sha
+    failures << "#{description}: upstream artifact checksum mismatch"
+    return nil
+  end
+  stdout.b
+rescue Errno::ENOENT
+  raise "#{description}: upstream artifact fetcher is unavailable (#{CURL})"
+end
+
+def validate_regenerated_components!(root, path, version, failures)
+  stdout, _stderr, status = Open3.capture3(
+    FLUX,
+    "install",
+    "--version=#{version}",
+    "--components=source-controller,kustomize-controller,helm-controller,notification-controller",
+    "--namespace=flux-system",
+    "--export",
+    chdir: root.to_s
+  )
+  raise "gotk-components: pinned Flux generator failed" unless status.success?
+  unless stdout.b == File.binread(path)
+    failures << "gotk-components does not match pinned Flux CLI generation"
+  end
+rescue Errno::ENOENT
+  raise "gotk-components: pinned Flux generator is unavailable (#{FLUX})"
+end
+
+def schema_archive_files(bytes, description)
+  files = {}
+  gzip = Zlib::GzipReader.new(StringIO.new(bytes))
+  archive = Gem::Package::TarReader.new(gzip)
+  archive.each do |entry|
+    next unless entry.file?
+
+    name = entry.full_name.sub(%r{\A\./}, "")
+    path = Pathname.new(name)
+    if name.empty? || path.absolute? || path.each_filename.include?("..")
+      raise "#{description}: unsafe archive path"
+    end
+    raise "#{description}: duplicate archive file #{name}" if files.key?(name)
+    files[name] = entry.read.b
+  end
+  files
+rescue Zlib::GzipFile::Error, Gem::Package::TarInvalidError, EOFError
+  raise "#{description}: invalid archive"
+ensure
+  archive&.close
+  gzip&.close
 end
 
 def resource_documents(document)
@@ -69,26 +160,279 @@ rescue Errno::ENOENT
   raise "Flux Kustomization #{owner}: Kustomize renderer is unavailable (#{KUBECTL})"
 end
 
+def kustomization_file_in(directory)
+  KUSTOMIZATION_FILENAMES.map { |name| directory.join(name) }.find(&:file?)
+end
+
+def validate_kustomize_composition!(root, package_dir)
+  visiting = Set.new
+  visited = Set.new
+  walk = lambda do |directory|
+    directory = repository_path(root, directory, "Kustomize composition")
+    return if visited.include?(directory)
+    raise "Kustomize composition cycle detected at #{directory.relative_path_from(root)}" if visiting.include?(directory)
+
+    kustomization = kustomization_file_in(directory)
+    raise "Kustomize composition has no Kustomization at #{directory.relative_path_from(root)}" unless kustomization
+
+    visiting << directory
+    document = yaml_file_documents(kustomization).first || {}
+    %w[resources components bases].flat_map { |key| Array(document[key]) }.each do |resource|
+      next unless resource.is_a?(String)
+      next if resource.match?(%r{\Ahttps?://})
+
+      target = repository_path(root, directory.join(resource).cleanpath, "Kustomize composition resource")
+      next unless target.directory?
+
+      walk.call(target)
+    end
+    visiting.delete(directory)
+    visited << directory
+  end
+  walk.call(package_dir)
+end
+
+def policy_identity(entry, description)
+  raise "#{description} must be a mapping" unless entry.is_a?(Hash)
+  %w[apiVersion kind namespace name].each do |field|
+    raise "#{description}.#{field} is required" if entry[field].to_s.empty?
+  end
+  [entry["apiVersion"], entry["kind"], entry["namespace"].to_s, entry["name"]].join("/")
+end
+
+def component_inventory(documents)
+  inventory = {
+    "controllers" => {},
+    "crds" => Set.new,
+    "clusterRoles" => Set.new,
+    "clusterRoleBindings" => Set.new
+  }
+
+  documents.each do |document|
+    resource_documents(document).each do |resource|
+      next unless resource.is_a?(Hash)
+
+      name = resource.dig("metadata", "name").to_s
+      case resource["kind"]
+      when "Deployment"
+        images = Array(resource.dig("spec", "template", "spec", "initContainers"))
+          .concat(Array(resource.dig("spec", "template", "spec", "containers")))
+          .map { |container| container.is_a?(Hash) ? container["image"] : nil }
+          .compact
+        inventory["controllers"][name] = images
+      when "CustomResourceDefinition"
+        inventory["crds"] << name
+      when "ClusterRole"
+        inventory["clusterRoles"] << name
+      when "ClusterRoleBinding"
+        inventory["clusterRoleBindings"] << name
+      end
+    end
+  end
+  inventory
+end
+
+def validate_components!(root, bootstrap, failures)
+  version = bootstrap["version"].to_s
+  version_valid = version.match?(/\Av\d+\.\d+\.\d+\z/)
+  unless version_valid
+    failures << "fluxBootstrap.version must be an exact vMAJOR.MINOR.PATCH"
+  end
+
+  expected_release_url = "https://github.com/fluxcd/flux2/releases/tag/#{version}"
+  failures << "fluxBootstrap.releaseUrl must be #{expected_release_url}" unless bootstrap["releaseUrl"] == expected_release_url
+
+  components = bootstrap["components"]
+  raise "fluxBootstrap.components must be a mapping" unless components.is_a?(Hash)
+  expected_source_url = "https://github.com/fluxcd/flux2/releases/download/#{version}/install.yaml"
+  source_url_valid = components["sourceUrl"] == expected_source_url
+  unless source_url_valid
+    failures << "fluxBootstrap components sourceUrl must be pinned to #{version}: #{expected_source_url}"
+  end
+  components_source_sha = components["sourceSha256"].to_s
+  if components_source_sha.match?(/\A[0-9a-f]{64}\z/)
+    verify_remote_sha256!(expected_source_url, components_source_sha, "Flux install.yaml", failures) if version_valid && source_url_valid
+  else
+    failures << "fluxBootstrap.components.sourceSha256 must be an exact lowercase SHA256"
+  end
+
+  relative_path = components["path"].to_s
+  raise "fluxBootstrap.components.path is required" if relative_path.empty?
+  path = repository_path(root, root.join(relative_path).cleanpath, "gotk-components")
+  expected_sha = components["sha256"].to_s
+  failures << "fluxBootstrap.components.sha256 must be an exact lowercase SHA256" unless expected_sha.match?(/\A[0-9a-f]{64}\z/)
+  failures << "gotk-components checksum mismatch: #{relative_path}" unless Digest::SHA256.file(path).hexdigest == expected_sha
+  validate_regenerated_components!(root, path, version, failures) if version_valid
+
+  documents = yaml_file_documents(path)
+  identity_list = documents.flat_map { |document| resource_documents(document) }.map do |document|
+    required_identity(document, path.to_s)
+  end
+  duplicate_identities = identity_list.each_with_object(Hash.new(0)) { |identity, counts| counts[identity] += 1 }
+    .select { |_identity, count| count > 1 }.keys
+  if duplicate_identities.any?
+    failures << "duplicate gotk-components resource identity: #{duplicate_identities.sort.join(', ')}"
+  end
+  identities = identity_list.to_set
+  inventory = component_inventory(documents)
+
+  expected_controllers = Array(components["controllers"])
+  raise "fluxBootstrap.components.controllers must not be empty" if expected_controllers.empty?
+  controller_names = Set.new
+  expected_controllers.each do |controller|
+    raise "fluxBootstrap.components.controllers entries must be mappings" unless controller.is_a?(Hash)
+    name = controller["name"].to_s
+    image = controller["image"].to_s
+    raise "fluxBootstrap.components controller name and image are required" if name.empty? || image.empty?
+    failures << "Flux controller image is not pinned: #{image}" unless image.match?(%r{\Aghcr\.io/fluxcd/[a-z0-9-]+(?::v\d+\.\d+\.\d+|@sha256:[0-9a-f]{64})\z})
+    failures << "Flux controller #{name} image must be exactly #{image}" unless inventory["controllers"][name] == [image]
+    failures << "duplicate Flux controller policy entry: #{name}" unless controller_names.add?(name)
+  end
+  unexpected_controllers = inventory["controllers"].keys.to_set - controller_names
+  failures << "unexpected Flux controllers in gotk-components: #{unexpected_controllers.to_a.sort.join(', ')}" if unexpected_controllers.any?
+
+  {
+    "requiredCRDs" => ["crds", "CRD"],
+    "requiredClusterRoles" => ["clusterRoles", "ClusterRole"],
+    "requiredClusterRoleBindings" => ["clusterRoleBindings", "ClusterRoleBinding"]
+  }.each do |policy_key, inventory_key|
+    expected = Array(components[policy_key])
+    raise "fluxBootstrap.components.#{policy_key} must not be empty" if expected.empty?
+    expected_set = expected.to_set
+    failures << "duplicate fluxBootstrap.components.#{policy_key} entry" unless expected.length == expected_set.length
+    actual_set = inventory.fetch(inventory_key.first)
+    unless actual_set == expected_set
+      failures << "gotk-components #{inventory_key.last} inventory mismatch: expected #{expected_set.to_a.sort.join(', ')}; found #{actual_set.to_a.sort.join(', ')}"
+    end
+  end
+
+  identities
+end
+
+def validate_flux_schemas!(root, bootstrap, failures)
+  version = bootstrap["version"].to_s
+  version_valid = version.match?(/\Av\d+\.\d+\.\d+\z/)
+  schemas = bootstrap["schemas"]
+  raise "fluxBootstrap.schemas must be a mapping" unless schemas.is_a?(Hash)
+
+  expected_source_url = "https://github.com/fluxcd/flux2/releases/download/#{version}/crd-schemas.tar.gz"
+  source_url_valid = schemas["sourceUrl"] == expected_source_url
+  failures << "fluxBootstrap schemas sourceUrl must be pinned to #{version}: #{expected_source_url}" unless source_url_valid
+  schemas_source_sha = schemas["sourceSha256"].to_s
+  archive_bytes = nil
+  if schemas_source_sha.match?(/\A[0-9a-f]{64}\z/)
+    if version_valid && source_url_valid
+      archive_bytes = verify_remote_sha256!(expected_source_url, schemas_source_sha, "Flux crd-schemas.tar.gz", failures)
+    end
+  else
+    failures << "fluxBootstrap.schemas.sourceSha256 must be an exact lowercase SHA256"
+  end
+
+  relative_directory = schemas["directory"].to_s
+  raise "fluxBootstrap.schemas.directory is required" if relative_directory.empty?
+  unless relative_directory.split(File::SEPARATOR).include?(version)
+    failures << "fluxBootstrap.schemas.directory must include pinned version #{version}"
+  end
+  directory = repository_path(root, root.join(relative_directory).cleanpath, "Flux schema directory")
+  raise "Flux schema directory is not a directory: #{relative_directory}" unless directory.directory?
+
+  entries = Array(schemas["files"])
+  raise "fluxBootstrap.schemas.files must not be empty" if entries.empty?
+  upstream_files = archive_bytes ? schema_archive_files(archive_bytes, "Flux crd-schemas.tar.gz") : {}
+  expected_files = Set.new
+  entries.each do |entry|
+    raise "fluxBootstrap.schemas.files entries must be mappings" unless entry.is_a?(Hash)
+    filename = entry["path"].to_s
+    expected_sha = entry["sha256"].to_s
+    raise "fluxBootstrap.schemas file path is required" if filename.empty?
+    failures << "Flux schema #{filename} sha256 must be an exact lowercase SHA256" unless expected_sha.match?(/\A[0-9a-f]{64}\z/)
+    failures << "duplicate Flux schema policy entry: #{filename}" unless expected_files.add?(filename)
+    path = repository_path(root, directory.join(filename).cleanpath, "Flux schema")
+    failures << "Flux schema checksum mismatch: #{filename}" unless Digest::SHA256.file(path).hexdigest == expected_sha
+    if archive_bytes
+      upstream_content = upstream_files[filename]
+      if upstream_content.nil?
+        failures << "Flux schema #{filename} is missing from upstream schema archive"
+      elsif File.binread(path) != upstream_content
+        failures << "Flux schema #{filename} does not match upstream schema archive"
+      end
+    end
+  end
+
+  actual_files = directory.glob("*.json").select(&:file?).map { |path| path.basename.to_s }.to_set
+  unless actual_files == expected_files
+    failures << "Flux schema inventory mismatch: expected #{expected_files.to_a.sort.join(', ')}; found #{actual_files.to_a.sort.join(', ')}"
+  end
+end
+
+def validate_bootstrap_contract!(bootstrap, failures)
+  {
+    "source" => EXPECTED_BOOTSTRAP_SOURCE,
+    "root" => EXPECTED_BOOTSTRAP_ROOT
+  }.each do |section, expected|
+    actual = bootstrap[section]
+    raise "fluxBootstrap.#{section} must be a mapping" unless actual.is_a?(Hash)
+    expected.each do |field, value|
+      failures << "fluxBootstrap.#{section}.#{field} must be #{value.inspect}" unless actual[field] == value
+    end
+  end
+end
+
 policy_path = root.join(".github/manifest-policy.yaml")
 policy = if policy_path.file?
            YAML.safe_load(File.read(policy_path), permitted_classes: [], permitted_symbols: [], aliases: false) || {}
          else
            {BOOTSTRAP_SOURCE_POLICY_KEY => [{"apiVersion" => "source.toolkit.fluxcd.io/v1", "kind" => "GitRepository", "namespace" => "flux-system", "name" => "flux-system"}]}
          end
+bootstrap = policy[FLUX_BOOTSTRAP_POLICY_KEY]
+bootstrap_component_identities = Set.new
+bootstrap_root_id = nil
+bootstrap_root_owner = nil
+bootstrap_source_id = nil
+if bootstrap
+  raise "#{FLUX_BOOTSTRAP_POLICY_KEY} must be a mapping" unless bootstrap.is_a?(Hash)
+  validate_bootstrap_contract!(bootstrap, failures)
+  bootstrap_component_identities = validate_components!(root, bootstrap, failures)
+  validate_flux_schemas!(root, bootstrap, failures)
+  bootstrap_source_id = policy_identity(bootstrap["source"], "fluxBootstrap.source")
+  bootstrap_root_id = policy_identity(bootstrap["root"], "fluxBootstrap.root")
+  root_policy = bootstrap.fetch("root")
+  bootstrap_root_owner = namespaced_identity("Kustomization", root_policy["namespace"], root_policy["name"])
+end
 allowed_bootstrap_sources = Set.new(Array(policy[BOOTSTRAP_SOURCE_POLICY_KEY]).map do |entry|
   [entry.fetch("apiVersion"), entry.fetch("kind"), entry.fetch("namespace").to_s, entry.fetch("name")].join("/")
 end)
 
-flux_files = root.join("clusters").glob("**/*.{yaml,yml,Kustomization}").select(&:file?)
+flux_files = root.join("clusters").glob("**/*").select do |path|
+  path.file? && (KUSTOMIZATION_FILENAMES.include?(path.basename.to_s) || %w[.yaml .yml .json].include?(path.extname.downcase))
+end
 flux_entries = flux_files.flat_map do |path|
-  yaml_file_documents(path).filter_map do |doc|
+  yaml_file_documents(path).flat_map { |document| resource_documents(document) }.each_with_object([]) do |doc, entries|
     next unless doc.is_a?(Hash) && doc["apiVersion"] == "kustomize.toolkit.fluxcd.io/v1" && doc["kind"] == "Kustomization"
-    [repository_path(root, path, "Flux input"), doc]
+    entries << [repository_path(root, path, "Flux input"), doc]
   end
 end
 raise "no Flux Kustomizations found" if flux_entries.empty?
 
+if bootstrap
+  source_policy = bootstrap.fetch("source")
+  source_inputs = flux_files.flat_map do |path|
+    yaml_file_documents(path).flat_map { |document| resource_documents(document) }.each_with_object([]) do |document, entries|
+      next unless document.is_a?(Hash) && document["apiVersion"] == source_policy["apiVersion"] && document["kind"] == source_policy["kind"]
+      next unless required_identity(document, path.to_s) == bootstrap_source_id
+      entries << [path, document]
+    end
+  end
+  failures << "bootstrap GitRepository must be declared exactly once in Git; found #{source_inputs.length}" unless source_inputs.length == 1
+  source_inputs.each do |_path, source|
+    failures << "bootstrap GitRepository url must be #{source_policy['url']}" unless source.dig("spec", "url") == source_policy["url"]
+    failures << "bootstrap GitRepository branch must be #{source_policy['branch']}" unless source.dig("spec", "ref") == {"branch" => source_policy["branch"]}
+    failures << "bootstrap GitRepository must not reference credentials for the public repository" if source.dig("spec", "secretRef")
+  end
+end
+
 seen_flux_identities = {}
+declared_flux_resources = {}
 flux_by_identity = {}
 package_objects = {}
 
@@ -101,16 +445,46 @@ flux_entries.each do |source_path, resource|
   flux_id = required_identity(resource, source_path.to_s)
   raise "duplicate Flux Kustomization #{flux_id}: #{seen_flux_identities[flux_id]} and #{source_path}" if seen_flux_identities.key?(flux_id)
   seen_flux_identities[flux_id] = source_path
+  declared_flux_resources[flux_id] = resource
   flux_by_identity[namespaced_identity("Kustomization", namespace, name)] = resource
 
   spec = resource["spec"]
   raise "Flux Kustomization #{name}: spec is missing" unless spec.is_a?(Hash)
-  failures << "Flux Kustomization #{name}: prune must be false" unless spec["prune"] == false
-  failures << "Flux Kustomization #{name}: suspend must be true" unless spec["suspend"] == true
+  is_bootstrap_root = bootstrap_root_id == flux_id
+  if is_bootstrap_root
+    root_policy = bootstrap.fetch("root")
+    failures << "bootstrap root prune must be #{root_policy['prune'].inspect}" unless spec["prune"] == root_policy["prune"]
+    failures << "bootstrap root must not be suspended" if spec["suspend"] == true
+  else
+    failures << "Flux Kustomization #{name}: prune must be false" unless spec["prune"] == false
+    failures << "Flux Kustomization #{name}: suspend must be true" unless spec["suspend"] == true
+  end
   path_value = spec["path"]
   raise "Flux Kustomization #{name}: spec.path is required" unless path_value.is_a?(String) && !path_value.empty?
+  if is_bootstrap_root && path_value != bootstrap.dig("root", "path")
+    raise "bootstrap root path must be #{bootstrap.dig('root', 'path')}"
+  end
   package_dir = root.join(path_value.sub(%r{\A\./}, "")).cleanpath
+  validate_kustomize_composition!(root, package_dir) if is_bootstrap_root
   package_objects[namespaced_identity("Kustomization", namespace, name)] = render_package(root, package_dir, name)
+end
+failures << "bootstrap root Kustomization is missing: #{bootstrap_root_id}" if bootstrap_root_id && !seen_flux_identities.key?(bootstrap_root_id)
+
+# Every rendered Flux Kustomization must have an identical declaration under clusters/.
+# This rejects Flux CRs smuggled through external package resources while still allowing
+# the bootstrap root to render its own reviewed declarations.
+package_objects.each do |owner, entries|
+  entries.each do |path, resource|
+    next unless resource.is_a?(Hash) && resource["apiVersion"] == "kustomize.toolkit.fluxcd.io/v1" && resource["kind"] == "Kustomization"
+
+    flux_id = required_identity(resource, path.to_s)
+    declared = declared_flux_resources[flux_id]
+    if declared.nil?
+      failures << "rendered Flux Kustomization is not declared under clusters: #{flux_id} (owner #{owner})"
+    elsif declared != resource
+      failures << "rendered Flux Kustomization differs from its declaration under clusters: #{flux_id} (owner #{owner})"
+    end
+  end
 end
 
 # Collect declared GitRepositories from the rendered package output plus the explicit
@@ -121,6 +495,36 @@ package_objects.each_value do |entries|
     next unless doc.is_a?(Hash) && doc["kind"] == "GitRepository"
     declared_git_repositories << required_identity(doc, path.to_s)
   end
+end
+
+if bootstrap
+  root_entries = package_objects.fetch(bootstrap_root_owner, [])
+  root_identities = root_entries.each_with_object([]) do |(path, document), identities|
+    next unless document.is_a?(Hash)
+    identities << required_identity(document, path.to_s)
+  end
+  missing_components = bootstrap_component_identities - root_identities.to_set
+  if missing_components.any?
+    failures << "bootstrap root render is missing gotk-components objects: #{missing_components.to_a.sort.join(', ')}"
+  end
+
+  source_policy = bootstrap.fetch("source")
+  source_entries = root_entries.select do |path, document|
+    document.is_a?(Hash) && required_identity(document, path.to_s) == bootstrap_source_id
+  end
+  if source_entries.length != 1
+    failures << "bootstrap root must render exactly one #{bootstrap_source_id}; found #{source_entries.length}"
+  else
+    source = source_entries.first.last
+    failures << "bootstrap GitRepository url must be #{source_policy['url']}" unless source.dig("spec", "url") == source_policy["url"]
+    failures << "bootstrap GitRepository branch must be #{source_policy['branch']}" unless source.dig("spec", "ref") == {"branch" => source_policy["branch"]}
+    failures << "bootstrap GitRepository must not reference credentials for the public repository" if source.dig("spec", "secretRef")
+  end
+
+  root_resource_count = root_entries.count do |path, document|
+    document.is_a?(Hash) && required_identity(document, path.to_s) == bootstrap_root_id
+  end
+  failures << "bootstrap root must render itself exactly once; found #{root_resource_count}" unless root_resource_count == 1
 end
 
 # Second pass: validate source references and dependencies against the complete inventory.
@@ -139,6 +543,12 @@ flux_entries.each do |_path, resource|
     source_id = ["source.toolkit.fluxcd.io/v1", source_ref["kind"], source_namespace.to_s, source_ref["name"]].join("/")
     unless declared_git_repositories.include?(source_id) || allowed_bootstrap_sources.include?(source_id)
       failures << "Flux Kustomization #{name}: GitRepository sourceRef is neither declared in rendered packages nor explicitly allowlisted: #{source_id}"
+    end
+    if bootstrap_root_id == required_identity(resource, "Flux Kustomization #{name}")
+      source_policy = bootstrap.fetch("source")
+      failures << "bootstrap root sourceRef.kind must be #{source_policy['kind']}" unless source_ref["kind"] == source_policy["kind"]
+      failures << "bootstrap root sourceRef.name must be #{source_policy['name']}" unless source_ref["name"] == source_policy["name"]
+      failures << "bootstrap root sourceRef.namespace must be #{source_policy['namespace']}" unless source_namespace == source_policy["namespace"]
     end
   end
 end

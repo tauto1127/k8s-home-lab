@@ -1,21 +1,50 @@
-# home Flux sync boundary
+# home Flux bootstrap boundary
 
-このPRはFlux bootstrapではなく、停止状態のmigration preparationである。gotk-components、Flux CRD/controller、GitRepository bootstrap定義はこのrepoにない。したがって、このPRをmerge/applyしただけでFluxがinstall/startしたりworkloadをreconcileしたりすることはない。
+このdirectoryは、Flux `v2.9.3`を後日installするためのGit入力である。このPRでは`gotk-components.yaml`、public GitRepository、root Kustomizationを追加するが、clusterには適用しない。mergeだけでFluxが動くことはない。
 
-すべてのFlux Kustomizationは`suspend: true`、`prune: false`、すべてのHelmReleaseは`suspend: true`を維持する。activationはCLIの`flux resume`ではなく、別PRのGit commitで、外側Flux Kustomizationと内側HelmReleaseのsuspendを同じactivation changeでfalseにする。root reconciliationはCLIで一時resumeしても、Git上の`suspend: true`へ戻す。
+root Kustomization `flux-system/flux-system`は`./clusters/home`を`prune: false`でreconcileする。`clusters/home/kustomization.yaml`が参照するのは`flux-system/`だけであり、`packages/`を直接renderしない。rootが作成する4つのpackage Kustomizationはすべて`suspend: true`、`prune: false`である。3つのHelmReleaseはGit上で`suspend: true`を維持するが、package停止中のbootstrap段階ではclusterに作成されない。Nextcloudは外側Kustomizationと内側HelmReleaseの両方で`flux.takutk.com/activation-blocked: "true"`を維持する。
 
-依存順はESO controller → ESO config（ClusterSecretStore/ExternalSecret）→ CSIである。NextcloudはIngress/PVC/NFS/Service/cron/probes/TLS、既存Helm release adoption、rendered child resource、Secretを読まないmetadata parityを含む完全parityが独立証明されるまでactivation対象外で、`flux.takutk.com/activation-blocked: "true"`を機械検証するfail-closed gateがある。`createNamespace: true`はHelmRelease CR自身のnamespaceを作成しないため、external-secretsとnextcloudのNamespace desired manifestをcontroller/nextcloud packageが所有する。
+## 固定した生成物
+
+- Flux release: `v2.9.3`
+- Release: <https://github.com/fluxcd/flux2/releases/tag/v2.9.3>
+- Upstream `install.yaml`: <https://github.com/fluxcd/flux2/releases/download/v2.9.3/install.yaml>
+- Upstream `install.yaml` SHA256: `aa0bd71dbc4bed916b9cafa850c4618f341c74c580832c613dca04a067ee7281`
+- Generated `gotk-components.yaml` SHA256: `c6e84495c3b611978d053adc40aca1e2a12af38f6e239c44a6b6c1224e01cab7`
+- CRD schema archive: <https://github.com/fluxcd/flux2/releases/download/v2.9.3/crd-schemas.tar.gz>
+- CRD schema archive SHA256: `91a555810a37a61b021d0a7334d5623783d267a7ecbbff7d5a00e8c7df9c0d33`
+
+`gotk-components.yaml`は、repository-pinned CLIを使う次のコマンドの出力である。
+
+```bash
+aqua exec -- flux install \
+  --version=v2.9.3 \
+  --components=source-controller,kustomize-controller,helm-controller,notification-controller \
+  --namespace=flux-system \
+  --export > clusters/home/flux-system/gotk-components.yaml
+```
+
+`gotk-sync.yaml`は次の2コマンドの`--export`出力を順番に連結したもので、credentialを含まない。
+
+```bash
+aqua exec -- flux create source git flux-system \
+  --namespace=flux-system \
+  --url=https://github.com/tauto1127/k8s-home-lab \
+  --branch=main \
+  --interval=1m \
+  --export
+
+aqua exec -- flux create kustomization flux-system \
+  --namespace=flux-system \
+  --source=GitRepository/flux-system \
+  --path=./clusters/home \
+  --prune=false \
+  --interval=10m \
+  --export
+```
+
+version、artifact URL/checksum、controller image、bootstrap source/root、offline schema inventoryは`.github/manifest-policy.yaml`と`scripts/validate-flux-ownership.rb`がfail-closedで検証する。validatorは固定HTTPS URLからupstream artifactを取得して記録したSHA256と照合し、repository-pinned Flux CLIで上記コマンドを再実行して`gotk-components.yaml`をbyte比較する。適用手順と停止条件は`docs/flux-bootstrap-runbook.md`を参照する。
 
 ## Activation boundary
 
-1. 別途Flux bootstrap（このPRでは実施しない）後、GitRepository identity `flux-system/flux-system`がbootstrap管理allowlistにあることを確認する。
-2. activation用の別PRで、外側Kustomizationと内側HelmReleaseを同じcommitで変更する。ESO controllerだけを先に有効化し、timeout 5mでReadyを確認する。
-3. ESO controllerのDeployment/CRDがReadyでなければ停止し、変更commitをrevertしてrollbackする。
-4. 次にESO configを有効化し、ClusterSecretStoreとExternalSecretのReady/SecretSyncedを、Secret値を取得せずmetadata/statusだけで確認する。timeoutまたはprovider不備なら停止・revertする。
-5. CSIを個別に有効化し、DaemonSetのrolloutと既存ownership collisionをread-only確認する。失敗時は停止・revertする。
-6. Nextcloudはこのrunbookでは有効化しない。完全parity証明と専用承認を満たした別PRでのみ、blocked annotationを解除する。
-7. prune有効化、既存release adoption、TLS/credential rotationの運用証跡は別レビューとする。
-
-expected diffは、activation PRの対象Kustomizationと同じpackage内HelmReleaseの`suspend: true`→`false`、Nextcloudを除く範囲でblocked annotationの変更、その他のmanifest差分なしである。Ready条件、timeout、stop、revertをPR本文に記録する。rotation記録はrepo/CIから独立検証できない運用証跡であり、activation safetyの自動証明ではない。
-
-CIのkubeconformはFlux CRD schemaを`allowedMissingSchemas`でskipしている。これはCRD compatibilityを証明せず、operator/server gateも存在しない。固定offline schema導入までは未証明ゲートとして扱う。
+bootstrap適用後もworkload activationは別PRと別承認で行う。公式bundleの`cluster-admin`付与はbootstrap承認時に明示確認し、workload activation前にはmulti-tenancy lockdown採用かsingle-tenant前提での継続を別レビューする。順序はESO controller → ESO config → CSIで、Nextcloudは完全なHelm values/render/adoption parityとSecret適用phaseの安全な設計が独立に証明されるまで対象外である。`activation-blocked` annotation自体をFluxは解釈しないため、CLI resumeや手動unsuspendは禁止する。activationの詳細は`docs/flux-pr2-activation-runbook.md`を参照する。

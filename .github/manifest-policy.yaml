@@ -20,6 +20,10 @@ clusterAdminBindings:
     name: root
     sha256: 6dff5d11260bbe637189a8bf9b5fc9fe062d3dc3b9ead90ffab456012e7e997b
     reason: Existing break-glass Dashboard access; replace with least privilege before Flux migration.
+  - path: clusters/home/flux-system/gotk-components.yaml
+    name: cluster-reconciler-flux-system
+    sha256: c6e84495c3b611978d053adc40aca1e2a12af38f6e239c44a6b6c1224e01cab7
+    reason: Official Flux v2.9.3 cluster reconciler binding; the complete generated bundle is checksum-pinned, bootstrap application requires separate approval, and the RBAC posture must be reviewed again before workload activation.
 
 renderedFloatingImages:
   - namespace: immich
@@ -44,13 +48,80 @@ renderedClusterAdminBindings:
     name: portainer
     sha256: 97a6571c1d2d507f100fdf34bcaf696ee025645ec4f022b0092ebd8d34c94ec2
     reason: Existing Portainer chart binding; rendered roleRef and subjects must remain identical to live until least privilege is designed.
+  - namespace: default
+    kind: ClusterRoleBinding
+    name: cluster-reconciler-flux-system
+    sha256: b571198758b52289343838bc69e97566b9a20af37b581c9c1aebc5d6e6fb8c9a
+    reason: Official Flux v2.9.3 bootstrap RBAC; rendered roleRef and subjects are pinned independently from the bundle checksum.
 
-bootstrapManagedSources:
-  - apiVersion: source.toolkit.fluxcd.io/v1
+bootstrapManagedSources: []
+
+fluxBootstrap:
+  reason: Pin the zero-Flux installation inputs and keep bootstrap/root ownership distinct from suspended workload packages.
+  version: v2.9.3
+  releaseUrl: https://github.com/fluxcd/flux2/releases/tag/v2.9.3
+  components:
+    path: clusters/home/flux-system/gotk-components.yaml
+    sourceUrl: https://github.com/fluxcd/flux2/releases/download/v2.9.3/install.yaml
+    sourceSha256: aa0bd71dbc4bed916b9cafa850c4618f341c74c580832c613dca04a067ee7281
+    sha256: c6e84495c3b611978d053adc40aca1e2a12af38f6e239c44a6b6c1224e01cab7
+    controllers:
+      - name: source-controller
+        image: ghcr.io/fluxcd/source-controller:v1.9.3
+      - name: kustomize-controller
+        image: ghcr.io/fluxcd/kustomize-controller:v1.9.4
+      - name: helm-controller
+        image: ghcr.io/fluxcd/helm-controller:v1.6.3
+      - name: notification-controller
+        image: ghcr.io/fluxcd/notification-controller:v1.9.2
+    requiredCRDs:
+      - buckets.source.toolkit.fluxcd.io
+      - externalartifacts.source.toolkit.fluxcd.io
+      - gitrepositories.source.toolkit.fluxcd.io
+      - helmcharts.source.toolkit.fluxcd.io
+      - helmrepositories.source.toolkit.fluxcd.io
+      - ocirepositories.source.toolkit.fluxcd.io
+      - kustomizations.kustomize.toolkit.fluxcd.io
+      - helmreleases.helm.toolkit.fluxcd.io
+      - alerts.notification.toolkit.fluxcd.io
+      - providers.notification.toolkit.fluxcd.io
+      - receivers.notification.toolkit.fluxcd.io
+    requiredClusterRoles:
+      - crd-controller-flux-system
+      - flux-edit-flux-system
+      - flux-view-flux-system
+    requiredClusterRoleBindings:
+      - cluster-reconciler-flux-system
+      - crd-controller-flux-system
+  schemas:
+    sourceUrl: https://github.com/fluxcd/flux2/releases/download/v2.9.3/crd-schemas.tar.gz
+    sourceSha256: 91a555810a37a61b021d0a7334d5623783d267a7ecbbff7d5a00e8c7df9c0d33
+    directory: .github/schemas/flux/v2.9.3/v1.36.0-standalone-strict
+    files:
+      - path: _definitions.json
+        sha256: b78cfed8b5a6e1de6bbb9deb91d53f628f1e86710dec15d3bf08daaad070f821
+      - path: gitrepository-source-v1.json
+        sha256: 673830d05f31c7ddd40aca4cdaa9190c3efc484cb0abba0c5b55428dd7629e54
+      - path: helmrelease-helm-v2.json
+        sha256: 0d0f5e20eb3df8996bc03211cc37e1a468a7ada310dc21d6feeca966ea1959c3
+      - path: helmrepository-source-v1.json
+        sha256: 96c519dd8a4f7e9cdde20a016cf4224166b4b7e6bb2b0ee50a73856fba77547b
+      - path: kustomization-kustomize-v1.json
+        sha256: 6f2b62dad57f65846d79b26f74df8c1cd2c5d9189e2b4e3fc1fd08dedaefe283
+  source:
+    apiVersion: source.toolkit.fluxcd.io/v1
     kind: GitRepository
     namespace: flux-system
     name: flux-system
-    reason: Flux bootstrap owns this source outside the migration-preparation repository; identity is allowlisted without importing bootstrap manifests.
+    url: https://github.com/tauto1127/k8s-home-lab
+    branch: main
+  root:
+    apiVersion: kustomize.toolkit.fluxcd.io/v1
+    kind: Kustomization
+    namespace: flux-system
+    name: flux-system
+    path: ./clusters/home
+    prune: false
 
 allowedMissingSchemas:
   - apiVersion: apiextensions.k8s.io/v1
@@ -73,15 +144,6 @@ allowedMissingSchemas:
     reason: This preparation CI intentionally has no offline schema for the CRD; no operator/server gate is run here.
   - apiVersion: external-secrets.io/v1beta1
     kind: ExternalSecret
-    reason: This preparation CI intentionally has no offline schema for the CRD; no operator/server gate is run here.
-  - apiVersion: helm.toolkit.fluxcd.io/v2
-    kind: HelmRelease
-    reason: This preparation CI intentionally has no offline schema for the CRD; no operator/server gate is run here.
-  - apiVersion: source.toolkit.fluxcd.io/v1
-    kind: HelmRepository
-    reason: This preparation CI intentionally has no offline schema for the CRD; no operator/server gate is run here.
-  - apiVersion: kustomize.toolkit.fluxcd.io/v1
-    kind: Kustomization
     reason: This preparation CI intentionally has no offline schema for the CRD; no operator/server gate is run here.
   - apiVersion: metallb.io/v1beta1
     kind: IPAddressPool
