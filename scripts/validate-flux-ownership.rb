@@ -15,6 +15,7 @@ failures = []
 
 BOOTSTRAP_SOURCE_POLICY_KEY = "bootstrapManagedSources"
 FLUX_BOOTSTRAP_POLICY_KEY = "fluxBootstrap"
+FLUX_ACTIVATION_POLICY_KEY = "fluxActivation"
 ACTIVATION_BLOCKED = "flux.takutk.com/activation-blocked"
 KUBECTL = ENV.fetch("FLUX_OWNERSHIP_KUBECTL", "kubectl")
 CURL = ENV.fetch("FLUX_OWNERSHIP_CURL", "curl")
@@ -198,6 +199,43 @@ def policy_identity(entry, description)
     raise "#{description}.#{field} is required" if entry[field].to_s.empty?
   end
   [entry["apiVersion"], entry["kind"], entry["namespace"].to_s, entry["name"]].join("/")
+end
+
+def activation_identity_set(activation, key, expected_api_version, expected_kind, failures)
+  entries = activation[key]
+  raise "#{FLUX_ACTIVATION_POLICY_KEY}.#{key} must be an array" unless entries.is_a?(Array)
+
+  entries.each_with_object(Set.new) do |entry, identities|
+    identity = policy_identity(entry, "#{FLUX_ACTIVATION_POLICY_KEY}.#{key} entry")
+    unless entry["apiVersion"] == expected_api_version && entry["kind"] == expected_kind
+      failures << "#{FLUX_ACTIVATION_POLICY_KEY}.#{key} entry must identify #{expected_api_version}/#{expected_kind}: #{identity}"
+    end
+    failures << "duplicate #{FLUX_ACTIVATION_POLICY_KEY}.#{key} entry: #{identity}" unless identities.add?(identity)
+  end
+end
+
+def validate_active_helm_release_safety(document, identity, failures)
+  spec = document["spec"]
+  namespace = document.dig("metadata", "namespace").to_s
+  name = document.dig("metadata", "name").to_s
+  {
+    "releaseName" => name,
+    "targetNamespace" => namespace,
+    "storageNamespace" => namespace
+  }.each do |field, expected|
+    failures << "active HelmRelease #{identity}: spec.#{field} must be #{expected}" unless spec[field] == expected
+  end
+  %w[install upgrade].each do |action|
+    action_spec = spec[action]
+    unless action_spec.is_a?(Hash)
+      failures << "active HelmRelease #{identity}: spec.#{action} is required"
+      next
+    end
+    failures << "active HelmRelease #{identity}: #{action}.crds must be Skip" unless action_spec["crds"] == "Skip"
+    unless action_spec["disableTakeOwnership"] == true
+      failures << "active HelmRelease #{identity}: #{action}.disableTakeOwnership must be true"
+    end
+  end
 end
 
 def component_inventory(documents)
@@ -399,6 +437,33 @@ if bootstrap
   root_policy = bootstrap.fetch("root")
   bootstrap_root_owner = namespaced_identity("Kustomization", root_policy["namespace"], root_policy["name"])
 end
+activation = policy[FLUX_ACTIVATION_POLICY_KEY]
+approved_active_kustomizations = Set.new
+approved_active_helm_releases = Set.new
+if activation
+  raise "#{FLUX_ACTIVATION_POLICY_KEY} must be a mapping" unless activation.is_a?(Hash)
+  %w[phase reason].each do |field|
+    raise "#{FLUX_ACTIVATION_POLICY_KEY}.#{field} is required" if activation[field].to_s.strip.empty?
+  end
+  approved_active_kustomizations = activation_identity_set(
+    activation,
+    "activeKustomizations",
+    "kustomize.toolkit.fluxcd.io/v1",
+    "Kustomization",
+    failures
+  )
+  approved_active_helm_releases = activation_identity_set(
+    activation,
+    "activeHelmReleases",
+    "helm.toolkit.fluxcd.io/v2",
+    "HelmRelease",
+    failures
+  )
+  raise "#{FLUX_ACTIVATION_POLICY_KEY} must approve at least one active Kustomization" if approved_active_kustomizations.empty?
+  if bootstrap_root_id && approved_active_kustomizations.include?(bootstrap_root_id)
+    failures << "bootstrap root must not be listed in #{FLUX_ACTIVATION_POLICY_KEY}.activeKustomizations"
+  end
+end
 allowed_bootstrap_sources = Set.new(Array(policy[BOOTSTRAP_SOURCE_POLICY_KEY]).map do |entry|
   [entry.fetch("apiVersion"), entry.fetch("kind"), entry.fetch("namespace").to_s, entry.fetch("name")].join("/")
 end)
@@ -435,6 +500,7 @@ seen_flux_identities = {}
 declared_flux_resources = {}
 flux_by_identity = {}
 package_objects = {}
+actual_active_kustomization_owners = Set.new
 
 # First pass: collect every Flux identity and render every target package. No dependency
 # or source validation is performed here, so declaration order cannot affect the result.
@@ -455,9 +521,17 @@ flux_entries.each do |source_path, resource|
     root_policy = bootstrap.fetch("root")
     failures << "bootstrap root prune must be #{root_policy['prune'].inspect}" unless spec["prune"] == root_policy["prune"]
     failures << "bootstrap root must not be suspended" if spec["suspend"] == true
+  elsif approved_active_kustomizations.include?(flux_id)
+    failures << "approved active Flux Kustomization #{name}: prune must be false" unless spec["prune"] == false
+    failures << "approved active Flux Kustomization #{name}: suspend must be false" unless spec["suspend"] == false
   else
     failures << "Flux Kustomization #{name}: prune must be false" unless spec["prune"] == false
     failures << "Flux Kustomization #{name}: suspend must be true" unless spec["suspend"] == true
+  end
+  owner = namespaced_identity("Kustomization", namespace, name)
+  actual_active_kustomization_owners << owner if !is_bootstrap_root && spec["suspend"] == false
+  if name == "nextcloud" && spec["suspend"] != true
+    failures << "Nextcloud Flux Kustomization must remain suspended"
   end
   path_value = spec["path"]
   raise "Flux Kustomization #{name}: spec.path is required" unless path_value.is_a?(String) && !path_value.empty?
@@ -469,6 +543,10 @@ flux_entries.each do |source_path, resource|
   package_objects[namespaced_identity("Kustomization", namespace, name)] = render_package(root, package_dir, name)
 end
 failures << "bootstrap root Kustomization is missing: #{bootstrap_root_id}" if bootstrap_root_id && !seen_flux_identities.key?(bootstrap_root_id)
+missing_active_kustomizations = approved_active_kustomizations - seen_flux_identities.keys.to_set
+missing_active_kustomizations.each do |identity|
+  failures << "approved active Flux Kustomization is missing: #{identity}"
+end
 
 # Every rendered Flux Kustomization must have an identical declaration under clusters/.
 # This rejects Flux CRs smuggled through external package resources while still allowing
@@ -600,7 +678,15 @@ package_objects.each do |_owner, entries|
   entries.each do |path, doc|
     next unless doc.is_a?(Hash) && doc["kind"] == "HelmRelease"
     id = required_identity(doc, path.to_s)
-    failures << "HelmRelease #{id}: suspend must be true" unless doc.dig("spec", "suspend") == true
+    if approved_active_helm_releases.include?(id)
+      failures << "approved active HelmRelease #{id}: suspend must be false" unless doc.dig("spec", "suspend") == false
+      validate_active_helm_release_safety(doc, id, failures)
+    else
+      failures << "HelmRelease #{id}: suspend must be true" unless doc.dig("spec", "suspend") == true
+    end
+    if doc.dig("metadata", "name") == "nextcloud" && doc.dig("spec", "suspend") != true
+      failures << "Nextcloud HelmRelease must remain suspended"
+    end
     chart_ref = doc.dig("spec", "chart", "spec", "sourceRef")
     if !chart_ref.is_a?(Hash) || chart_ref["kind"] != "HelmRepository" || chart_ref["name"].to_s.empty?
       failures << "HelmRelease #{id}: chart.spec.sourceRef HelmRepository is required"
@@ -608,6 +694,28 @@ package_objects.each do |_owner, entries|
       ref_ns = chart_ref["namespace"] || doc.dig("metadata", "namespace").to_s
       repo_id = ["source.toolkit.fluxcd.io/v1", "HelmRepository", ref_ns.to_s, chart_ref["name"]].join("/")
       failures << "HelmRelease #{id}: HelmRepository sourceRef is missing or mismatched: #{repo_id}" unless seen_objects.key?(repo_id)
+    end
+  end
+end
+missing_active_helm_releases = approved_active_helm_releases - seen_objects.keys.to_set
+missing_active_helm_releases.each do |identity|
+  failures << "approved active HelmRelease is missing: #{identity}"
+end
+approved_active_helm_releases.each do |identity|
+  next unless seen_objects.key?(identity)
+
+  owner = seen_objects.fetch(identity).first
+  unless actual_active_kustomization_owners.include?(owner)
+    failures << "active HelmRelease #{identity} is rendered by a suspended Flux Kustomization #{owner}"
+  end
+end
+actual_active_kustomization_owners.each do |owner|
+  Array(package_objects[owner]).each do |path, doc|
+    next unless doc.is_a?(Hash) && doc["kind"] == "HelmRelease"
+
+    identity = required_identity(doc, path.to_s)
+    unless approved_active_helm_releases.include?(identity) && doc.dig("spec", "suspend") == false
+      failures << "active Flux Kustomization #{owner} must activate HelmRelease #{identity} in the same policy"
     end
   end
 end

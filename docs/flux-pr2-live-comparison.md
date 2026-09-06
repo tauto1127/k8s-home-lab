@@ -55,11 +55,29 @@ PR #36にはこれらの候補定義があるが、PR2では取り込まず、�
 - live Secretの生成owner labels/annotationsは外部Secret controller由来であり、Gitへ
   取り込まない。ExternalSecretのGit desiredにlive Secretの生成metadataをコピーしない。
 
+## 2026-09-07 ESO activation preflight追記
+
+Flux bootstrap/root同期後、repository-pinned Helm v3.18.1でESO chart 0.14.4を現在の
+Git設定どおりrenderした。Secret 1件を完全に除外した37 resourceのserver-side dry-run
+diffは0件だった。chartがrenderする全38 resourceは、Secretのmetadataだけを含めて
+`meta.helm.sh/release-name=external-secrets`、
+`meta.helm.sh/release-namespace=external-secrets`、`app.kubernetes.io/managed-by=Helm`が
+liveで一致した。同じ対象を管理するArgo Applicationまたは別のFlux HelmReleaseは表示されなかった。
+
+この結果は非Secretのrendered stateとHelm ownership metadataの一致を示すが、Flux
+helm-controllerによる初回upgradeが成功したことは示さない。activation PRでは
+release/target/storage namespaceを明示し、install/upgradeとも`disableTakeOwnership: true`、
+`crds: Skip`として、ownership不一致やCRD変更を成功扱いしない。
+
 ## unknown / activation blockers
 
-- 2026-09-07のread-only再確認でも、Flux namespace、Flux CRD/controller、Flux Helm releaseはliveに存在しなかった。Gitには後続PRでbootstrap入力を追加したが、`docs/flux-bootstrap-runbook.md`の別承認でclusterへ適用するまでzero-Fluxのままである。
-- ESO/CSI/Nextcloudの全chart values、renderされた全child、image digest（ESO/CSIの
-  全コンテナ）、Helm release ownership collisionは未証明。
+- PR #45 merge後の2026-09-07に、別承認でFlux componentsとroot syncを適用した。
+  Flux controller、GitRepository、root Kustomizationは
+  `main@sha1:ff7996f84b7d13b9606bdf9b6c4b072858803e88`でReadyとなり、4つのworkload
+  Kustomizationは停止状態で作成された。ESO activation PRをマージするまではworkloadをreconcileしない。
+- CSI/Nextcloudの全chart values、renderされた全child、image digest、Helm release ownership
+  collisionは未証明。ESOは上記の非Secret render/ownership比較を完了したが、Secret dataと
+  実際のFlux初回upgrade結果は未証明。
 - `gcpsm-secret`は手動/外部プロビジョニングの前提で、dataをimportしない。
 - HelmReleaseのunsuspend、Flux Kustomizationのunsuspend、read-only diff、明示承認が
   完了するまでreconcileしない。初期定義は全て`prune: false`、Kustomization/HelmRelease

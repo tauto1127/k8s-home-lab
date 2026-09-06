@@ -6,8 +6,10 @@ metadata:
 spec:
   interval: 30m
   timeout: 5m
-  suspend: true
+  suspend: false
   releaseName: external-secrets
+  targetNamespace: external-secrets
+  storageNamespace: external-secrets
   chart:
     spec:
       chart: external-secrets
@@ -19,10 +21,14 @@ spec:
       interval: 30m
   install:
     createNamespace: true
+    crds: Skip
+    disableTakeOwnership: true
     remediation:
       retries: 0
     disableWait: false
   upgrade:
+    crds: Skip
+    disableTakeOwnership: true
     remediation:
       retries: 0
       remediateLastFailure: false

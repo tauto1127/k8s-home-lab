@@ -752,10 +752,114 @@ Dir.mktmpdir("flux-reference-validation-test") do |temporary_root|
   assert((stdout + stderr).include?("HelmRepository sourceRef is missing or mismatched"), "missing HelmRepository was accepted")
 end
 
+Dir.mktmpdir("flux-activation-policy-test") do |temporary_root|
+  FileUtils.mkdir_p(File.join(temporary_root, "clusters/flux"))
+  FileUtils.mkdir_p(File.join(temporary_root, "clusters/pkg"))
+  FileUtils.mkdir_p(File.join(temporary_root, ".github"))
+  policy_path = File.join(temporary_root, ".github/manifest-policy.yaml")
+  flux_path = File.join(temporary_root, "clusters/flux/sync.yaml")
+  release_path = File.join(temporary_root, "clusters/pkg/release.yaml")
+  validator = File.join(ROOT, "scripts/validate-flux-ownership.rb")
+
+  inactive_flux = <<~YAML
+    apiVersion: kustomize.toolkit.fluxcd.io/v1
+    kind: Kustomization
+    metadata:
+      name: eso-controller
+      namespace: flux-system
+    spec:
+      path: ./clusters/pkg
+      prune: false
+      suspend: true
+      sourceRef:
+        kind: GitRepository
+        name: flux-system
+  YAML
+  inactive_release = <<~YAML
+    apiVersion: helm.toolkit.fluxcd.io/v2
+    kind: HelmRelease
+    metadata:
+      name: external-secrets
+      namespace: external-secrets
+    spec:
+      suspend: true
+      releaseName: external-secrets
+      targetNamespace: external-secrets
+      storageNamespace: external-secrets
+      chart:
+        spec:
+          chart: external-secrets
+          sourceRef:
+            kind: HelmRepository
+            name: external-secrets
+            namespace: flux-system
+      install:
+        crds: Skip
+        disableTakeOwnership: true
+      upgrade:
+        crds: Skip
+        disableTakeOwnership: true
+  YAML
+  activation_policy = <<~YAML
+    bootstrapManagedSources:
+      - apiVersion: source.toolkit.fluxcd.io/v1
+        kind: GitRepository
+        namespace: flux-system
+        name: flux-system
+    fluxActivation:
+      phase: eso-controller
+      reason: Fixture activation requires the outer and inner resources together.
+      activeKustomizations:
+        - apiVersion: kustomize.toolkit.fluxcd.io/v1
+          kind: Kustomization
+          namespace: flux-system
+          name: eso-controller
+      activeHelmReleases:
+        - apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          namespace: external-secrets
+          name: external-secrets
+  YAML
+  File.write(policy_path, activation_policy)
+  File.write(File.join(temporary_root, "clusters/pkg/kustomization.yaml"), "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: [repo.yaml, release.yaml]\n")
+  File.write(File.join(temporary_root, "clusters/pkg/repo.yaml"), "apiVersion: source.toolkit.fluxcd.io/v1\nkind: HelmRepository\nmetadata:\n  name: external-secrets\n  namespace: flux-system\nspec:\n  interval: 1h\n  url: https://charts.external-secrets.io\n")
+
+  File.write(flux_path, inactive_flux.sub("suspend: true", "suspend: false"))
+  File.write(release_path, inactive_release.sub("suspend: true", "suspend: false"))
+  assert_success("ruby", validator, temporary_root)
+
+  File.write(release_path, inactive_release)
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("approved active HelmRelease"), "activation policy accepted a suspended inner HelmRelease")
+
+  unsafe_release = inactive_release
+    .sub("suspend: true", "suspend: false")
+    .sub("disableTakeOwnership: true", "disableTakeOwnership: false")
+  File.write(release_path, unsafe_release)
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("install.disableTakeOwnership must be true"), "active HelmRelease was allowed to take ownership")
+
+  File.write(flux_path, inactive_flux)
+  File.write(release_path, inactive_release.sub("suspend: true", "suspend: false"))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("rendered by a suspended Flux Kustomization"), "activation policy accepted an active inner HelmRelease under a suspended owner")
+
+  File.write(flux_path, inactive_flux.sub("suspend: true", "suspend: false"))
+  File.write(release_path, inactive_release.sub("suspend: true", "suspend: false"))
+  File.write(policy_path, activation_policy.sub(/^  activeHelmReleases:\n {4}- .*\n(?: {6}.*\n){3}/, "  activeHelmReleases: []\n"))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("suspend must be true"), "unapproved active HelmRelease was accepted")
+
+  File.write(policy_path, activation_policy.sub("name: external-secrets\n", "name: missing\n"))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("approved active HelmRelease is missing"), "stale active HelmRelease policy identity was accepted")
+end
+
 Dir.mktmpdir("flux-render-and-gate-validation-test") do |temporary_root|
   FileUtils.mkdir_p(File.join(temporary_root, "clusters/flux"))
   FileUtils.mkdir_p(File.join(temporary_root, ".github"))
-  File.write(File.join(temporary_root, ".github/manifest-policy.yaml"), "bootstrapManagedSources:\n  - apiVersion: source.toolkit.fluxcd.io/v1\n    kind: GitRepository\n    namespace: flux-system\n    name: flux-system\n")
+  policy_path = File.join(temporary_root, ".github/manifest-policy.yaml")
+  File.write(policy_path, "bootstrapManagedSources:\n  - apiVersion: source.toolkit.fluxcd.io/v1\n    kind: GitRepository\n    namespace: flux-system\n    name: flux-system\n")
   FileUtils.mkdir_p(File.join(temporary_root, "clusters/pkg"))
   File.write(File.join(temporary_root, "clusters/pkg/kustomization.yaml"), "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: [rendered.yaml]\n")
   File.write(File.join(temporary_root, "clusters/pkg/rendered.yaml"), <<~YAML)
@@ -818,6 +922,33 @@ Dir.mktmpdir("flux-render-and-gate-validation-test") do |temporary_root|
   File.write(File.join(temporary_root, "clusters/pkg/rendered.yaml"), rendered.split("---").first)
   stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
   assert((stdout + stderr).include?("Nextcloud HelmRelease is required"), "inner Nextcloud HelmRelease omission was accepted")
+
+  File.write(policy_path, <<~YAML)
+    bootstrapManagedSources:
+      - apiVersion: source.toolkit.fluxcd.io/v1
+        kind: GitRepository
+        namespace: flux-system
+        name: flux-system
+    fluxActivation:
+      phase: forbidden-nextcloud
+      reason: Fixture proves the activation-blocked package cannot be allowlisted active.
+      activeKustomizations:
+        - apiVersion: kustomize.toolkit.fluxcd.io/v1
+          kind: Kustomization
+          namespace: flux-system
+          name: nextcloud
+      activeHelmReleases:
+        - apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          namespace: nextcloud
+          name: nextcloud
+  YAML
+  File.write(flux_path, valid.sub("suspend: true", "suspend: false"))
+  File.write(File.join(temporary_root, "clusters/pkg/rendered.yaml"), rendered.sub("suspend: true", "suspend: false"))
+  stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+  output = stdout + stderr
+  assert(output.include?("Nextcloud Flux Kustomization must remain suspended"), "Nextcloud outer activation was allowlisted")
+  assert(output.include?("Nextcloud HelmRelease must remain suspended"), "Nextcloud inner activation was allowlisted")
 end
 
 Dir.mktmpdir("flux-order-and-source-validation-test") do |temporary_root|

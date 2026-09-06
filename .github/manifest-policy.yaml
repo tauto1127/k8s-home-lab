@@ -56,6 +56,20 @@ renderedClusterAdminBindings:
 
 bootstrapManagedSources: []
 
+fluxActivation:
+  phase: eso-controller
+  reason: Adopt the existing External Secrets Operator 0.14.4 Helm release only after an exact non-Secret live diff and Helm ownership check; keep every dependent package suspended.
+  activeKustomizations:
+    - apiVersion: kustomize.toolkit.fluxcd.io/v1
+      kind: Kustomization
+      namespace: flux-system
+      name: eso-controller
+  activeHelmReleases:
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      namespace: external-secrets
+      name: external-secrets
+
 fluxBootstrap:
   reason: Pin the zero-Flux installation inputs and keep bootstrap/root ownership distinct from suspended workload packages.
   version: v2.9.3
