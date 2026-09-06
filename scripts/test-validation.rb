@@ -317,6 +317,88 @@ Dir.mktmpdir("flux-ownership-test") do |temporary_root|
     YAML
   assert_success("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
 
+  outside_root = Dir.mktmpdir("flux-ownership-outside", File.dirname(temporary_root))
+  FileUtils.mkdir_p(File.join(outside_root, "empty-package"))
+  File.write(File.join(outside_root, "empty-package/kustomization.yaml"), "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: []\n")
+  File.write(File.join(temporary_root, "clusters/home/flux-system/sync.yaml"), <<~YAML)
+    apiVersion: kustomize.toolkit.fluxcd.io/v1
+    kind: Kustomization
+    metadata:
+      name: escape
+      namespace: flux-system
+    spec:
+      path: ../#{File.basename(outside_root)}/empty-package
+      prune: false
+      suspend: true
+    YAML
+  stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+  assert((stdout + stderr).include?("escapes repository"), "Flux ownership validator accepted a path escape")
+
+  FileUtils.rm_rf(File.join(temporary_root, "clusters/home/flux-system/sync.yaml"))
+  File.symlink(File.join(outside_root, "empty-package"), File.join(temporary_root, "clusters/home/packages/escaped"))
+  File.write(File.join(temporary_root, "clusters/home/flux-system/sync.yaml"), <<~YAML)
+    apiVersion: kustomize.toolkit.fluxcd.io/v1
+    kind: Kustomization
+    metadata:
+      name: symlink-escape
+      namespace: flux-system
+    spec:
+      path: ./clusters/home/packages/escaped
+      prune: false
+      suspend: true
+    YAML
+  stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+  assert((stdout + stderr).include?("escapes repository"), "Flux ownership validator accepted a symlink escape")
+  FileUtils.remove_entry(outside_root)
+
+  FileUtils.rm_f(File.join(temporary_root, "clusters/home/packages/escaped"))
+  File.write(File.join(temporary_root, "clusters/home/flux-system/sync.yaml"), <<~YAML)
+    apiVersion: kustomize.toolkit.fluxcd.io/v1
+    kind: Kustomization
+    metadata:
+      name: a
+      namespace: flux-system
+    spec:
+      path: ./clusters/home/packages/a
+      prune: false
+      suspend: true
+    YAML
+  File.write(File.join(temporary_root, "clusters/home/packages/a/kustomization.yaml"), <<~YAML)
+    apiVersion: kustomize.config.k8s.io/v1beta1
+    kind: Kustomization
+    resources: [resource.yaml, resource.yaml]
+    YAML
+  stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+  assert((stdout + stderr).include?("duplicate Flux-owned object"), "Flux ownership validator accepted a same-owner duplicate")
+  File.write(File.join(temporary_root, "clusters/home/packages/a/kustomization.yaml"), <<~YAML)
+    apiVersion: kustomize.config.k8s.io/v1beta1
+    kind: Kustomization
+    resources: [resource.yaml]
+    YAML
+  File.write(File.join(temporary_root, "clusters/home/flux-system/sync.yaml"), <<~YAML)
+    apiVersion: kustomize.toolkit.fluxcd.io/v1
+    kind: Kustomization
+    metadata:
+      name: duplicate
+      namespace: flux-system
+    spec:
+      path: ./clusters/home/packages/a
+      prune: false
+      suspend: true
+    ---
+    apiVersion: kustomize.toolkit.fluxcd.io/v1
+    kind: Kustomization
+    metadata:
+      name: duplicate
+      namespace: flux-system
+    spec:
+      path: ./clusters/home/packages/b
+      prune: false
+      suspend: true
+    YAML
+  stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+  assert((stdout + stderr).include?("duplicate Flux Kustomization"), "Flux ownership validator accepted duplicate Flux metadata identity")
+
   File.write(File.join(temporary_root, "clusters/home/flux-system/sync.yaml"), <<~YAML)
     apiVersion: kustomize.toolkit.fluxcd.io/v1
     kind: Kustomization
@@ -337,6 +419,11 @@ Dir.mktmpdir("flux-ownership-test") do |temporary_root|
       path: ./clusters/home/packages/b
       prune: false
       suspend: true
+    YAML
+  File.write(File.join(temporary_root, "clusters/home/packages/a/kustomization.yaml"), <<~YAML)
+    apiVersion: kustomize.config.k8s.io/v1beta1
+    kind: Kustomization
+    resources: [resource.yaml]
     YAML
   File.write(File.join(temporary_root, "clusters/home/packages/b/kustomization.yaml"), <<~YAML)
     apiVersion: kustomize.config.k8s.io/v1beta1

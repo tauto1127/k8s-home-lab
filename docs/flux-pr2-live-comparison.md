@@ -8,22 +8,34 @@
 manifest、Helm values/manifestは取得・保存していない。Flux bootstrap/reconcile/applyは
 行っていない。
 
-## 一致
+## PR2で比較できたフィールド
+
+次の項目だけが、PR2のGit定義に明示され、選択したliveフィールドと比較できる範囲である。Helm chartのrender結果全体や、HelmReleaseが宣言していないchild resourceのparityは意味しない。
 
 | 項目 | Git desired | live selected field | 判定 |
 | --- | --- | --- | --- |
-| ESO chart | `external-secrets` 0.14.4 | release `external-secrets`, chart `external-secrets-0.14.4`, app `v0.14.4` | 一致 |
+| ESO chart | `external-secrets` 0.14.4 | release `external-secrets`, chart `external-secrets-0.14.4`, app `v0.14.4` | Git/liveの選択フィールド一致 |
 | ESO controller image | chart既定のv0.14.4を明示的に上書きしない | controller系Deploymentはv0.14.4 image tag | 部分一致（digest未確認） |
-| CSI chart | `secrets-store-csi-driver` 1.4.8 | release/chart/app `1.4.8` | 一致 |
-| Nextcloud chart | `nextcloud` 9.1.3 | release/chart `nextcloud-9.1.3`, app `33.0.5` | 一致 |
-| Nextcloud image | `docker.io/library/nextcloud:33.0.5-apache@sha256:476228e615088e7d2de4bd9a87187961dfbff1577a96ff07955ec35dbe18f3c9` | live tag `33.0.5-apache`, digest `sha256:476228e615088e7d2de4bd9a87187961dfbff1577a96ff07955ec35dbe18f3c9` | 一致（digestは既存baseline） |
-| Nextcloud existingSecret | `nextcloud-db-secret`, username/password key | live Deployment/Secret参照と一致 | 一致 |
-| ExternalSecret target/store | target `nextcloud-db-secret`, `ClusterSecretStore/secret-store-provider` | liveと一致 | 一致 |
-| ExternalSecret refresh/retention | `24h`, `Owner`, `Retain` | live `24h`, `Owner`, `Retain` | 一致 |
-| ExternalSecret remote refs | 4 keys: db-password, admin-password, secret, passwordsalt; all `latest`, decoding `None` | live selected refsと一致 | 一致 |
-| Nextcloud ingress | class `kong`, host `nc.takutk.com` | live class/hostと一致 | 一致 |
-| Nextcloud storage | PVC `nextcloud-data-pvc`, `200Gi` | live Bound, `200Gi` | 一致（PV ownershipは未導入） |
-| ESO provider reference | `gcpsm-secret/secret-access-credentials`, project `269357193809` | live selected reference/projectと一致 | 一致（Secret dataは外部前提） |
+| CSI chart | `secrets-store-csi-driver` 1.4.8 | release/chart/app `1.4.8` | Git/liveの選択フィールド一致 |
+| Nextcloud chart | chart `nextcloud` 9.1.3 | release/chart `nextcloud-9.1.3`, app `33.0.5` | Git/liveの選択フィールド一致 |
+| Nextcloud image | repository、`33.0.5-apache`、digestをHelmReleaseに明示 | live tag/digestと一致 | Git/liveの選択フィールド一致 |
+| Nextcloud existingSecret | `nextcloud-db-secret`、username/password keyを明示 | live Deployment/Secret参照と一致 | Git/liveの選択フィールド一致 |
+| ExternalSecret target/store | target `nextcloud-db-secret`, `ClusterSecretStore/secret-store-provider` | liveと一致 | Git/liveの選択フィールド一致 |
+| ExternalSecret refresh/retention | `24h`, `Owner`, `Retain` | live `24h`, `Owner`, `Retain` | Git/liveの選択フィールド一致 |
+| ExternalSecret remote refs | 4 keys、各 `latest`、decoding `None` | live selected refsと一致 | Git/liveの選択フィールド一致 |
+| ESO provider reference | `gcpsm-secret/secret-access-credentials`, project `269357193809` | live selected reference/projectと一致 | Git/liveの選択フィールド一致（Secret dataは外部前提） |
+
+## PR2で証明していないlive-only/reference項目
+
+PR2のNextcloud HelmReleaseはimageとexistingSecretだけを宣言する。ingress class/host、PVC `nextcloud-data-pvc`/`200Gi`、Service、NFS、cron、probes、TLS等はPR2のdesiredにはないため、Git desiredとの「一致」には分類しない。
+
+| 項目 | live/reference情報 | 判定 |
+| --- | --- | --- |
+| Nextcloud ingress | live class `kong`、host `nc.takutk.com` | live-only/reference; PR2 parity unknown |
+| Nextcloud storage | live PVC `nextcloud-data-pvc`、`200Gi` Bound | live-only/reference; PR2 parity unknown |
+| Nextcloud Service/NFS/cron/probes/TLS | PR #36の候補定義またはlive情報 | parity unknown; PR2の所有対象外 |
+
+PR #36にはこれらの候補定義があるが、PR2では取り込まず、所有者・render結果・live差分の確認なしにparityを主張しない。
 
 ## ownership / drift
 
@@ -34,6 +46,8 @@ manifest、Helm values/manifestは取得・保存していない。Flux bootstra
 - CSI live DaemonSetはchart `secrets-store-csi-driver-1.4.8`で、旧Helmfileの所有境界を
   `middlewares/secrets-store-csi-driver/`へ分離した。Git mainにある1.5.1からではなく、
   live 1.4.8をこの移行baselineに固定し、Renovate PR #28 (1.6.0)は対象外とした。
+  `middlewares/secrets-store-csi-driver/helmfile.yaml`とNextcloudの旧Helmfileは、比較・移行検討用の
+  legacy reference-only定義であり、PR2のFlux Kustomizationからは参照されず、active Flux ownerではない。
 - Nextcloud live DeploymentはHelm labels/chart labelと1 replica。GitにはHelmReleaseを
   定義するが、PR #36の全values、init container、NFS、service annotations、TLS Secret、
   liveness/readiness、cron等の完全parityはこの比較だけでは証明できない。そのため
