@@ -25,4 +25,4 @@ mainの履歴rewriteは実施しない。実効性のあるcredentialはロー�
 影響が大きく、今回のリスク低減に対して不釣り合いと判断した。GitGuardian側のincident
 status分類は必要ならUIで別途行う。
 
-この文書は分類とメタデータだけを記録し、Secretの値、token、fingerprint、hashを含めない。
+この文書は分類とメタデータだけを記録し、Secretの値、token、fingerprint、hashを含めない。rotation記録はrepo/CIから独立検証できない運用証跡であり、activation safetyの自動証明ではない。

@@ -71,7 +71,8 @@ bindingは意図的にpackageから除外している。
 - External Secrets Operatorのlive Helm release（chart `external-secrets-0.14.4`）は、このリポジトリ内にGit所有元がない。`middlewares/external-secrets-operator/helmfile.yaml`が管理しているのはESO本体ではなく、Secrets Store CSI Driverである。
 - Secrets Store CSI Driverは、Gitのdesired chart versionが`1.5.1`、liveが`1.4.8`である。差分を確認してから、どちらを正本にするか決める。
 - Nextcloudはlive Helm chart `9.1.3`で、Podが使用中の`33.0.5-apache` image digestに固定した。liveはExternalSecretが生成する`nextcloud-db-secret`を参照しているため、Helmfileも同じSecret名とキーを参照し、chartの既定資格情報Secretをrenderしない。ExternalSecret自体のGit ownerとHelm chartの全valuesが一致したことまでは確認していないため、HelmRelease化は引き続き`migration-pending`とする。
-- PR2では、各Flux Kustomizationの所有境界を先に決め、同じ`apiVersion/kind/namespace/name`を複数のKustomizationから管理しない。特に、親Kustomizationが子Kustomizationを取り込む構造を自動検出で二重登録しない。controllers、CRDs、PVC/PV、Secret生成物、依存するカスタムリソースは境界と`dependsOn`を分け、初回は`prune: false`とする。
+- Nextcloud valuesは不完全で、既存releaseをupgradeするとchart defaultsへ戻る危険がある。Ingress/PVC/NFS/Service/cron/probes/TLS、既存release adoptionと完全parityが証明されるまで`activation-blocked`で停止し、runbook対象外とする。Secret値を取得せず証明できない場合はvaluesを補完しない。
+- activationはCLI resumeではなく、外側Kustomizationと内側HelmReleaseを同一Git commitでfalseにする別PRで行う。root reconciliationはGitのsuspend:trueに戻す。特に、親Kustomizationが子Kustomizationを取り込む構造を自動検出で二重登録しない。controllers、CRDs、PVC/PV、Secret生成物、依存するカスタムリソースは境界と`dependsOn`を分け、初回は`prune: false`とする。
 
 ## liveにのみ存在するdesired workload
 

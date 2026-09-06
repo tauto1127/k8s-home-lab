@@ -3,6 +3,8 @@ kind: HelmRelease
 metadata:
   name: nextcloud
   namespace: nextcloud
+  annotations:
+    flux.takuto.dev/activation-blocked: "true"
 spec:
   interval: 30m
   timeout: 10m

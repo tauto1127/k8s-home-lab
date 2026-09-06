@@ -302,6 +302,9 @@ Dir.mktmpdir("flux-ownership-test") do |temporary_root|
       path: ./clusters/home/packages/a
       prune: false
       suspend: true
+      sourceRef:
+        kind: GitRepository
+        name: flux-system
     YAML
   File.write(File.join(temporary_root, "clusters/home/packages/a/kustomization.yaml"), <<~YAML)
     apiVersion: kustomize.config.k8s.io/v1beta1
@@ -330,6 +333,9 @@ Dir.mktmpdir("flux-ownership-test") do |temporary_root|
       path: ../#{File.basename(outside_root)}/empty-package
       prune: false
       suspend: true
+      sourceRef:
+        kind: GitRepository
+        name: flux-system
     YAML
   stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
   assert((stdout + stderr).include?("escapes repository"), "Flux ownership validator accepted a path escape")
@@ -346,6 +352,9 @@ Dir.mktmpdir("flux-ownership-test") do |temporary_root|
       path: ./clusters/home/packages/escaped
       prune: false
       suspend: true
+      sourceRef:
+        kind: GitRepository
+        name: flux-system
     YAML
   stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
   assert((stdout + stderr).include?("escapes repository"), "Flux ownership validator accepted a symlink escape")
@@ -362,6 +371,9 @@ Dir.mktmpdir("flux-ownership-test") do |temporary_root|
       path: ./clusters/home/packages/a
       prune: false
       suspend: true
+      sourceRef:
+        kind: GitRepository
+        name: flux-system
     YAML
   File.write(File.join(temporary_root, "clusters/home/packages/a/kustomization.yaml"), <<~YAML)
     apiVersion: kustomize.config.k8s.io/v1beta1
@@ -395,6 +407,9 @@ Dir.mktmpdir("flux-ownership-test") do |temporary_root|
       path: ./clusters/home/packages/b
       prune: false
       suspend: true
+      sourceRef:
+        kind: GitRepository
+        name: flux-system
     YAML
   stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
   assert((stdout + stderr).include?("duplicate Flux Kustomization"), "Flux ownership validator accepted duplicate Flux metadata identity")
@@ -419,6 +434,9 @@ Dir.mktmpdir("flux-ownership-test") do |temporary_root|
       path: ./clusters/home/packages/b
       prune: false
       suspend: true
+      sourceRef:
+        kind: GitRepository
+        name: flux-system
     YAML
   File.write(File.join(temporary_root, "clusters/home/packages/a/kustomization.yaml"), <<~YAML)
     apiVersion: kustomize.config.k8s.io/v1beta1
@@ -433,6 +451,35 @@ Dir.mktmpdir("flux-ownership-test") do |temporary_root|
   File.write(File.join(temporary_root, "clusters/home/packages/b/resource.yaml"), File.read(File.join(temporary_root, "clusters/home/packages/a/resource.yaml")))
   stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
   assert((stdout + stderr).include?("duplicate Flux-owned object"), "Flux ownership validator did not catch duplicate object")
+end
+
+Dir.mktmpdir("flux-reference-validation-test") do |temporary_root|
+  FileUtils.mkdir_p(File.join(temporary_root, "clusters/flux"))
+  FileUtils.mkdir_p(File.join(temporary_root, ".github"))
+  File.write(File.join(temporary_root, ".github/manifest-policy.yaml"), "bootstrapManagedSources:\n  - apiVersion: source.toolkit.fluxcd.io/v1\n    kind: GitRepository\n    namespace: flux-system\n    name: flux-system\n    reason: fixture\n")
+  FileUtils.mkdir_p(File.join(temporary_root, "clusters/pkg"))
+  File.write(File.join(temporary_root, "clusters/pkg/kustomization.yaml"), "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: [repo.yaml, release.yaml]\n")
+  File.write(File.join(temporary_root, "clusters/pkg/repo.yaml"), "apiVersion: source.toolkit.fluxcd.io/v1\nkind: HelmRepository\nmetadata:\n  name: charts\n  namespace: flux-system\nspec:\n  interval: 1h\n  url: https://example.invalid\n")
+  File.write(File.join(temporary_root, "clusters/pkg/release.yaml"), "apiVersion: helm.toolkit.fluxcd.io/v2\nkind: HelmRelease\nmetadata:\n  name: app\n  namespace: default\nspec:\n  suspend: true\n  chart:\n    spec:\n      chart: app\n      sourceRef:\n        kind: HelmRepository\n        name: charts\n        namespace: flux-system\n")
+  flux_path = File.join(temporary_root, "clusters/flux/sync.yaml")
+  valid = "apiVersion: kustomize.toolkit.fluxcd.io/v1\nkind: Kustomization\nmetadata:\n  name: app\n  namespace: flux-system\nspec:\n  path: ./clusters/pkg\n  prune: false\n  suspend: true\n  sourceRef:\n    kind: GitRepository\n    name: flux-system\n"
+  File.write(flux_path, valid)
+  assert_success("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+
+  File.write(flux_path, valid.gsub(/  sourceRef:\n    kind: GitRepository\n    name: flux-system\n/, ""))
+  stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+  assert((stdout + stderr).include?("sourceRef is required"), "missing sourceRef was accepted")
+  File.write(flux_path, valid.sub("  sourceRef:\n", "  dependsOn:\n    - name: missing\n  sourceRef:\n"))
+  stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+  assert((stdout + stderr).include?("unknown dependency"), "unknown dependency was accepted")
+  cycle = valid.sub("  sourceRef:\n", "  dependsOn:\n    - name: app\n  sourceRef:\n")
+  File.write(flux_path, cycle)
+  stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+  assert((stdout + stderr).include?("dependency cycle"), "dependency cycle was accepted")
+  File.write(flux_path, valid)
+  File.write(File.join(temporary_root, "clusters/pkg/release.yaml"), File.read(File.join(temporary_root, "clusters/pkg/release.yaml")).sub("name: charts", "name: missing"))
+  stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+  assert((stdout + stderr).include?("HelmRepository sourceRef is missing or mismatched"), "missing HelmRepository was accepted")
 end
 
 puts "Validation fixtures passed."

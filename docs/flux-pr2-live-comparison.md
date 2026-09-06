@@ -27,7 +27,7 @@ manifest、Helm values/manifestは取得・保存していない。Flux bootstra
 
 ## PR2で証明していないlive-only/reference項目
 
-PR2のNextcloud HelmReleaseはimageとexistingSecretだけを宣言する。ingress class/host、PVC `nextcloud-data-pvc`/`200Gi`、Service、NFS、cron、probes、TLS等はPR2のdesiredにはないため、Git desiredとの「一致」には分類しない。
+PR2のNextcloud valuesは不完全であり、既存releaseをupgradeするとchart defaultsへ戻る危険がある。Ingress/PVC/NFS/Service/cron/probes/TLS、既存Helm release adoption、rendered child resourceの完全parityが未証明のため、Nextcloudはactivation runbookから除外し、`flux.takut.dev/activation-blocked: "true"`のfail-closed gateで停止する。Secret値を取得せず完全parityを証明できない場合、valuesを補完しない。
 
 | 項目 | live/reference情報 | 判定 |
 | --- | --- | --- |
@@ -68,10 +68,6 @@ PR #36にはこれらの候補定義があるが、PR2では取り込まず、�
 
 ## activation order
 
-1. Flux bootstrap（このPRでは実施しない）
-2. read-only diffとownership collision確認
-3. 明示承認
-4. ESO controllerのhealth確認後にcontroller packageだけunsuspend
-5. CRD/ClusterSecretStore/ExternalSecret設定のhealth確認
-6. CSI、Nextcloudの順に個別unsuspend
-7. prune有効化は別レビュー
+CLI `flux resume`ではなく、別PRのGit commitで外側Flux Kustomizationと内側HelmReleaseを同じ変更でfalseにする。root reconciliationはGit上の`suspend: true`へ戻す。詳細なdependency順、expected diff、Ready条件、timeout/stop/rollbackは`docs/flux-pr2-activation-runbook.md`を参照する。ESO controller → ESO config → CSIの段階で、Nextcloudは完全parity証明まで対象外。
+
+このPRはFlux bootstrapではない。gotk-components、CRD/controllers、GitRepository bootstrapはrepoにないため、merge/applyだけでFluxがinstall/startすることも、このPRのままworkloadをreconcileすることもない。
