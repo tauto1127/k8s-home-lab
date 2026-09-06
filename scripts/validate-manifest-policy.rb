@@ -228,48 +228,43 @@ documents.each do |path, stream|
   end
 
   stream.each do |document|
-    next unless document.is_a?(Hash)
+    each_kubernetes_resource(document) do |resource|
+      kind = resource["kind"]
 
-    kind = document["kind"]
-    kubernetes_manifest = document.key?("apiVersion") && kind
+      if !package_kustomization?(path, resource) && !excluded.include?(path) && !migration_pending.include?(path) && !kustomized_resources.include?(path)
+        failures << "#{path}: Kubernetes manifest is not listed by a package kustomization"
+      end
 
-    if kubernetes_manifest && !package_kustomization?(path, document) && !excluded.include?(path) && !migration_pending.include?(path) && !kustomized_resources.include?(path)
-      failures << "#{path}: Kubernetes manifest is not listed by a package kustomization"
+      if kind == "Secret" && (resource["data"].to_h.any? || resource["stringData"].to_h.any?)
+        failures << "#{path}: literal Secret data is forbidden; use ExternalSecret"
+      end
+
+      each_sensitive_environment_literal(resource) do |name, _value|
+        failures << "#{path}: sensitive environment variable #{name} must use valueFrom"
+      end
+
+      each_container_image(resource) do |image|
+        next unless floating_image?(image)
+        next if excluded.include?(path)
+        next if floating_exceptions.include?([path, image])
+
+        failures << "#{path}: floating container image is forbidden: #{image}"
+      end
+
+      next unless cluster_admin_binding?(resource)
+
+      name = resource.dig("metadata", "name").to_s
+      exception = Array(policy["clusterAdminBindings"]).find do |entry|
+        entry["path"] == path && entry["name"] == name
+      end
+      unless exception && cluster_admin_exceptions.include?([path, name])
+        failures << "#{path}: new cluster-admin binding is forbidden: #{name}"
+        next
+      end
+
+      actual_hash = Digest::SHA256.file(path).hexdigest
+      failures << "#{path}: approved cluster-admin binding changed" unless actual_hash == exception["sha256"]
     end
-
-    each_mapping(document) do |mapping|
-      next unless mapping["kind"] == "Secret" && mapping["apiVersion"]
-      next unless mapping["data"].to_h.any? || mapping["stringData"].to_h.any?
-
-      failures << "#{path}: literal Secret data is forbidden; use ExternalSecret"
-    end
-
-    each_sensitive_environment_literal(document) do |name, _value|
-      failures << "#{path}: sensitive environment variable #{name} must use valueFrom"
-    end
-
-    each_container_image(document) do |image|
-      next unless floating_image?(image)
-      next if excluded.include?(path)
-      next if floating_exceptions.include?([path, image])
-
-      failures << "#{path}: floating container image is forbidden: #{image}"
-    end
-
-    next unless cluster_admin_binding?(document)
-
-    name = document.dig("metadata", "name").to_s
-    exception = Array(policy["clusterAdminBindings"]).find do |entry|
-      entry["path"] == path && entry["name"] == name
-    end
-    unless exception && cluster_admin_exceptions.include?([path, name])
-      failures << "#{path}: new cluster-admin binding is forbidden: #{name}"
-      next
-    end
-
-
-    actual_hash = Digest::SHA256.file(path).hexdigest
-    failures << "#{path}: approved cluster-admin binding changed" unless actual_hash == exception["sha256"]
   end
 
   next unless File.basename(path) == "helmfile.yaml"

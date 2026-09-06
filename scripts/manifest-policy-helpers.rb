@@ -122,6 +122,22 @@ module ManifestPolicyHelpers
       document.dig("roleRef", "name") == "cluster-admin"
   end
 
+  def each_kubernetes_resource(document, sanitized_document = nil, &block)
+    return unless document.is_a?(Hash)
+
+    items = document["items"]
+    if document["kind"].to_s.end_with?("List") && items.is_a?(Array)
+      sanitized_items = sanitized_document.is_a?(Hash) ? sanitized_document["items"] : nil
+      items.each_with_index do |item, index|
+        sanitized_item = sanitized_items.is_a?(Array) ? sanitized_items[index] : nil
+        each_kubernetes_resource(item, sanitized_item, &block)
+      end
+      return
+    end
+
+    block.call(document, sanitized_document) if document["kind"] && document["apiVersion"]
+  end
+
   def redact_secret_checksums!(value)
     case value
     when Hash

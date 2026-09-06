@@ -13,6 +13,10 @@ def run_command(*command, env: {})
   Open3.capture3(env, *command, chdir: ROOT)
 end
 
+def run_in_directory(directory, *command, env: {})
+  Open3.capture3(env, *command, chdir: directory)
+end
+
 def assert(condition, message)
   raise message unless condition
 end
@@ -58,6 +62,99 @@ assert(
   "Flux Kustomization was incorrectly exempted"
 )
 
+Dir.mktmpdir("source-policy-test") do |temporary_root|
+  FileUtils.mkdir_p(File.join(temporary_root, "scripts"))
+  FileUtils.mkdir_p(File.join(temporary_root, ".github"))
+  FileUtils.mkdir_p(File.join(temporary_root, "apps/test"))
+  %w[manifest-policy-helpers.rb validate-manifest-policy.rb].each do |script|
+    FileUtils.cp(File.join(__dir__, script), File.join(temporary_root, "scripts", script))
+  end
+  File.write(
+    File.join(temporary_root, ".github/manifest-policy.yaml"),
+    <<~YAML
+      clusterAdminBindings:
+        - path: apps/test/bad.yaml
+          name: nested-admin
+          sha256: #{"0" * 64}
+          reason: Fixture-only stale binding hash.
+    YAML
+  )
+  File.write(
+    File.join(temporary_root, "apps/test/kustomization.yaml"),
+    <<~YAML
+      apiVersion: kustomize.config.k8s.io/v1beta1
+      kind: Kustomization
+      resources:
+        - bad.yaml
+        - linked.yaml
+        - ../../../outside.yaml
+        - https://example.invalid/unpinned.yaml
+    YAML
+  )
+  File.write(
+    File.join(temporary_root, "apps/test/bad.yaml"),
+    <<~YAML
+      apiVersion: v1
+      kind: List
+      items:
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            name: nested-secret
+          stringData:
+            password: FIXTURE_SOURCE_SECRET_VALUE
+        - apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: nested-admin
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: cluster-admin
+          subjects: []
+        - apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: sensitive-env
+          spec:
+            selector:
+              matchLabels:
+                app: sensitive-env
+            template:
+              metadata:
+                labels:
+                  app: sensitive-env
+              spec:
+                containers:
+                  - name: app
+                    image: example.invalid/app@sha256:#{"0" * 64}
+                    env:
+                      - name: AWS_SECRET_ACCESS_KEY
+                        value: FIXTURE_SOURCE_ENV_VALUE
+    YAML
+  )
+  File.symlink("bad.yaml", File.join(temporary_root, "apps/test/linked.yaml"))
+  _stdout, stderr, status = run_in_directory(temporary_root, "git", "init", "--quiet")
+  assert(status.success?, "fixture repository init failed: #{stderr}")
+  _stdout, stderr, status = run_in_directory(temporary_root, "git", "add", ".")
+  assert(status.success?, "fixture repository staging failed: #{stderr}")
+  stdout, stderr, status = run_in_directory(temporary_root, "ruby", "scripts/validate-manifest-policy.rb")
+  assert(!status.success?, "source policy accepted unsafe fixture manifests")
+  output = stdout + stderr
+  [
+    "literal Secret data is forbidden",
+    "AWS_SECRET_ACCESS_KEY must use valueFrom",
+    "approved cluster-admin binding changed",
+    "resource escapes the repository",
+    "symlinked YAML is forbidden",
+    "remote Kustomize resource is not allowlisted"
+  ].each do |needle|
+    assert(output.include?(needle), "source policy regression is not reported: #{needle}")
+  end
+  assert(!output.include?("FIXTURE_SOURCE_SECRET_VALUE"), "source policy output disclosed a fixture Secret value")
+  assert(!output.include?("FIXTURE_SOURCE_ENV_VALUE"), "source policy output disclosed a fixture environment value")
+end
+
 Dir.mktmpdir("manifest-validation-test") do |temporary_root|
   rendered_root = File.join(temporary_root, "rendered-root")
   rendered_fixture_root = File.join(rendered_root, "rendered-policy")
@@ -75,6 +172,7 @@ Dir.mktmpdir("manifest-validation-test") do |temporary_root|
       rendered-policy/env-list.yaml	apps/wordpress/helmfile.yaml
       rendered-policy/env-map.yaml	apps/wordpress/helmfile.yaml
       rendered-policy/rolebinding.yaml	apps/wordpress/helmfile.yaml
+      rendered-policy/list.yaml	apps/wordpress/helmfile.yaml
     TSV
   )
 
@@ -87,6 +185,8 @@ Dir.mktmpdir("manifest-validation-test") do |temporary_root|
     assert(output.include?(needle), "rendered policy regression is not reported: #{needle}")
   end
   assert(output.include?("RoleBinding/bad-admin"), "RoleBinding cluster-admin reference was not reported")
+  assert(output.include?("nested-secret"), "Secret nested in a List was not reported")
+  assert(output.include?("RoleBinding/nested-admin"), "RoleBinding nested in a List was not reported")
   assert(!output.include?("REDACTED"), "rendered policy output disclosed a fixture value")
 
   allowed_policy = File.join(temporary_root, "allowed-policy.yaml")

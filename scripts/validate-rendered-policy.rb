@@ -55,59 +55,59 @@ Dir.glob(render_root.join("**/*.yaml"), File::FNM_DOTMATCH).sort.each do |path|
   sanitized_stream = Marshal.load(Marshal.dump(stream))
 
   stream.each_with_index do |document, document_index|
-    next unless document.is_a?(Hash) && document["kind"]
+    sanitized_document = sanitized_stream.fetch(document_index)
+    each_kubernetes_resource(document, sanitized_document) do |resource, sanitized_resource|
+      resource_count += 1
+      namespace = resource.dig("metadata", "namespace") || "default"
+      kind = resource["kind"]
+      name = resource.dig("metadata", "name").to_s
 
-    resource_count += 1
-    namespace = document.dig("metadata", "namespace") || "default"
-    kind = document["kind"]
-    name = document.dig("metadata", "name").to_s
-
-    each_sensitive_environment_literal(document) do |env_name, _value|
-      failures << "#{source_path || relative_path}: sensitive rendered environment variable #{env_name} must use valueFrom"
-    end
-
-    if document["kind"] == "Secret" && (document["data"].to_h.any? || document["stringData"].to_h.any?)
-      literal_keys = (document["data"].to_h.keys + document["stringData"].to_h.keys).map(&:to_s).uniq
-      exception = secret_exceptions.find do |entry|
-        entry["sourcePath"] == source_path &&
-          entry["namespace"].to_s == namespace.to_s &&
-          entry["kind"] == document["kind"] &&
-          entry["name"] == name
+      each_sensitive_environment_literal(resource) do |env_name, _value|
+        failures << "#{source_path || relative_path}: sensitive rendered environment variable #{env_name} must use valueFrom"
       end
-      allowed_keys = Array(exception && exception["allowedKeys"]).map(&:to_s)
-      unexpected_keys = literal_keys - allowed_keys
-      if exception.nil? || unexpected_keys.any?
-        suffix = unexpected_keys.empty? ? "" : ": unexpected keys #{unexpected_keys.join(', ')}"
-        failures << "#{source_path || relative_path}: literal rendered Secret is forbidden for #{namespace}/#{document['kind']}/#{name}#{suffix}"
-      elsif sanitized_root
-        sanitized_document = sanitized_stream.fetch(document_index)
-        %w[data stringData].each do |field|
-          sanitized_document[field].to_h.each_key do |key|
-            sanitized_document[field][key] = "REDACTED" if allowed_keys.include?(key.to_s)
+
+      if kind == "Secret" && (resource["data"].to_h.any? || resource["stringData"].to_h.any?)
+        literal_keys = (resource["data"].to_h.keys + resource["stringData"].to_h.keys).map(&:to_s).uniq
+        exception = secret_exceptions.find do |entry|
+          entry["sourcePath"] == source_path &&
+            entry["namespace"].to_s == namespace.to_s &&
+            entry["kind"] == kind &&
+            entry["name"] == name
+        end
+        allowed_keys = Array(exception && exception["allowedKeys"]).map(&:to_s)
+        unexpected_keys = literal_keys - allowed_keys
+        if exception.nil? || unexpected_keys.any?
+          suffix = unexpected_keys.empty? ? "" : ": unexpected keys #{unexpected_keys.join(', ')}"
+          failures << "#{source_path || relative_path}: literal rendered Secret is forbidden for #{namespace}/#{kind}/#{name}#{suffix}"
+        elsif sanitized_root && sanitized_resource
+          %w[data stringData].each do |field|
+            sanitized_resource[field].to_h.each_key do |key|
+              sanitized_resource[field][key] = "REDACTED" if allowed_keys.include?(key.to_s)
+            end
           end
         end
       end
-    end
 
-    each_container_image(document) do |image|
-      next unless floating_image?(image)
-      next if floating_exceptions.include?([namespace, kind, name, image])
+      each_container_image(resource) do |image|
+        next unless floating_image?(image)
+        next if floating_exceptions.include?([namespace, kind, name, image])
 
-      failures << "#{namespace}/#{kind}/#{name}: floating rendered image is forbidden: #{image}"
-    end
+        failures << "#{namespace}/#{kind}/#{name}: floating rendered image is forbidden: #{image}"
+      end
 
-    next unless cluster_admin_binding?(document)
-    exception = Array(policy["renderedClusterAdminBindings"]).find do |entry|
-      entry["namespace"] == namespace && entry["kind"] == kind && entry["name"] == name
-    end
-    unless exception && cluster_admin_exceptions.include?([namespace, kind, name])
-      failures << "#{kind}/#{name}: rendered cluster-admin binding is forbidden"
-      next
-    end
+      next unless cluster_admin_binding?(resource)
+      exception = Array(policy["renderedClusterAdminBindings"]).find do |entry|
+        entry["namespace"] == namespace && entry["kind"] == kind && entry["name"] == name
+      end
+      unless exception && cluster_admin_exceptions.include?([namespace, kind, name])
+        failures << "#{kind}/#{name}: rendered cluster-admin binding is forbidden"
+        next
+      end
 
-    binding = {"roleRef" => document["roleRef"], "subjects" => document["subjects"]}
-    actual_hash = Digest::SHA256.hexdigest(JSON.generate(deep_sort(binding)))
-    failures << "#{kind}/#{name}: approved rendered cluster-admin binding changed" unless actual_hash == exception["sha256"]
+      binding = {"roleRef" => resource["roleRef"], "subjects" => resource["subjects"]}
+      actual_hash = Digest::SHA256.hexdigest(JSON.generate(deep_sort(binding)))
+      failures << "#{kind}/#{name}: approved rendered cluster-admin binding changed" unless actual_hash == exception["sha256"]
+    end
   end
 
   next unless sanitized_root
