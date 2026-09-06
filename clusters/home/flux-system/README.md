@@ -2,7 +2,7 @@
 
 このdirectoryは、Flux `v2.9.3`を後日installするためのGit入力である。このPRでは`gotk-components.yaml`、public GitRepository、root Kustomizationを追加するが、clusterには適用しない。mergeだけでFluxが動くことはない。
 
-root Kustomization `flux-system/flux-system`は`./clusters/home`を`prune: false`でreconcileする。`clusters/home/kustomization.yaml`が参照するのは`flux-system/`だけであり、`packages/`を直接renderしない。rootが作成する4つのpackage Kustomizationはすべて`suspend: true`、`prune: false`である。3つのHelmReleaseも`suspend: true`を維持する。Nextcloudは外側Kustomizationと内側HelmReleaseの両方で`flux.takutk.com/activation-blocked: "true"`を維持する。
+root Kustomization `flux-system/flux-system`は`./clusters/home`を`prune: false`でreconcileする。`clusters/home/kustomization.yaml`が参照するのは`flux-system/`だけであり、`packages/`を直接renderしない。rootが作成する4つのpackage Kustomizationはすべて`suspend: true`、`prune: false`である。3つのHelmReleaseはGit上で`suspend: true`を維持するが、package停止中のbootstrap段階ではclusterに作成されない。Nextcloudは外側Kustomizationと内側HelmReleaseの両方で`flux.takutk.com/activation-blocked: "true"`を維持する。
 
 ## 固定した生成物
 
@@ -43,8 +43,8 @@ aqua exec -- flux create kustomization flux-system \
   --export
 ```
 
-version、artifact URL/checksum、controller image、bootstrap source/root、offline schema inventoryは`.github/manifest-policy.yaml`と`scripts/validate-flux-ownership.rb`がfail-closedで検証する。適用手順と停止条件は`docs/flux-bootstrap-runbook.md`を参照する。
+version、artifact URL/checksum、controller image、bootstrap source/root、offline schema inventoryは`.github/manifest-policy.yaml`と`scripts/validate-flux-ownership.rb`がfail-closedで検証する。validatorは固定HTTPS URLからupstream artifactを取得し、記録したSHA256と実bytesを照合する。適用手順と停止条件は`docs/flux-bootstrap-runbook.md`を参照する。
 
 ## Activation boundary
 
-bootstrap適用後もworkload activationは別PRと別承認で行う。順序はESO controller → ESO config → CSIで、Nextcloudは完全なHelm values/render/adoption parityが独立に証明されるまで対象外である。activationの詳細は`docs/flux-pr2-activation-runbook.md`を参照する。
+bootstrap適用後もworkload activationは別PRと別承認で行う。公式bundleの`cluster-admin`付与はbootstrap承認時に明示確認し、workload activation前にはmulti-tenancy lockdown採用かsingle-tenant前提での継続を別レビューする。順序はESO controller → ESO config → CSIで、Nextcloudは完全なHelm values/render/adoption parityとSecret適用phaseの安全な設計が独立に証明されるまで対象外である。`activation-blocked` annotation自体をFluxは解釈しないため、CLI resumeや手動unsuspendは禁止する。activationの詳細は`docs/flux-pr2-activation-runbook.md`を参照する。

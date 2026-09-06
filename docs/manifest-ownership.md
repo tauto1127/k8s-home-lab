@@ -54,7 +54,7 @@ PVC、PV、namespace、CRD、privileged bindingは、初回移行時に
 | `pv/pv-md0.yaml`, `pv/kustomization.yaml` | flux-candidate | static PV。最初は削除保護と`prune: false`が必要。 |
 | `pv/storageTest.yaml` | excluded | test Pod。liveには存在しない。 |
 | `pv/test-pvc.yaml` | excluded | test PVCは現在もBoundのため、cleanupは別途storageの判断が必要。 |
-| `clusters/home/flux-system/gotk-components.yaml` | bootstrap | Flux `v2.9.3`のCRD/controller/RBAC。生成物とSHA256をpolicyで固定し、cluster適用は別承認とする。 |
+| `clusters/home/flux-system/gotk-components.yaml` | bootstrap | Flux `v2.9.3`のCRD/controller/RBAC。生成物とupstream bytesのSHA256をpolicyで検証し、公式bundleの`cluster-admin`付与を含むcluster適用は別承認とする。 |
 | `clusters/home/flux-system/gotk-sync.yaml` | bootstrap | public GitRepositoryとactive root Kustomization。rootは`flux-system/`だけをcomposeし、`packages/`を直接所有しない。 |
 | `clusters/home/flux-system/sync.yaml` | migration-pending | 4つのpackage Kustomization定義。全て`suspend: true`、`prune: false`で、activationは別PRとする。 |
 
@@ -75,6 +75,7 @@ bindingは意図的にpackageから除外している。
 - Secrets Store CSI Driverは、Gitのdesired chart versionが`1.5.1`、liveが`1.4.8`である。差分を確認してから、どちらを正本にするか決める。
 - Nextcloudはlive Helm chart `9.1.3`で、Podが使用中の`33.0.5-apache` image digestに固定した。liveはExternalSecretが生成する`nextcloud-db-secret`を参照しているため、Helmfileも同じSecret名とキーを参照し、chartの既定資格情報Secretをrenderしない。ExternalSecret自体のGit ownerとHelm chartの全valuesが一致したことまでは確認していないため、HelmRelease化は引き続き`migration-pending`とする。
 - Nextcloud valuesは不完全で、既存releaseをupgradeするとchart defaultsへ戻る危険がある。Ingress/PVC/NFS/Service/cron/probes/TLS、既存release adoptionと完全parityが証明されるまで`activation-blocked`で停止し、runbook対象外とする。Secret値を取得せず証明できない場合はvaluesを補完しない。
+- `activation-blocked` annotationはCI markerでありFlux nativeの強制機構ではない。Nextcloudの外側Kustomizationだけを手動resumeするとExternalSecretが先に適用され得るため、CLI resume/手動unsuspendは禁止する。将来activationにはSecret適用phaseの分離またはadmission policyを必須とする。
 - activationはCLI resumeではなく、外側Kustomizationと内側HelmReleaseを同一Git commitでfalseにする別PRで行う。root reconciliationはGitのsuspend:trueに戻す。特に、親Kustomizationが子Kustomizationを取り込む構造を自動検出で二重登録しない。controllers、CRDs、PVC/PV、Secret生成物、依存するカスタムリソースは境界と`dependsOn`を分け、初回は`prune: false`とする。
 
 ## liveにのみ存在するdesired workload

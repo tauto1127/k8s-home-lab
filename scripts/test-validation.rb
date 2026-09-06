@@ -11,6 +11,9 @@ ROOT = File.expand_path("..", __dir__)
 FIXTURES = File.join(__dir__, "fixtures")
 FAKE_KUBECTL_DIR = Dir.mktmpdir("flux-ownership-kubectl")
 FAKE_KUBECTL = File.join(FAKE_KUBECTL_DIR, "kubectl")
+FAKE_CURL = File.join(FAKE_KUBECTL_DIR, "curl")
+FIXTURE_INSTALL_ASSET = "fixture Flux install asset v2.9.3\n"
+FIXTURE_SCHEMA_ASSET = "fixture Flux schema asset v2.9.3\n"
 File.write(FAKE_KUBECTL, <<~'SH')
   #!/usr/bin/env bash
   set -euo pipefail
@@ -35,10 +38,27 @@ File.write(FAKE_KUBECTL, <<~'SH')
   fi
 SH
 FileUtils.chmod(0o755, FAKE_KUBECTL)
+File.write(FAKE_CURL, <<~'SH')
+  #!/usr/bin/env bash
+  set -euo pipefail
+  url="${!#}"
+  case "$url" in
+    https://github.com/fluxcd/flux2/releases/download/v2.9.3/install.yaml)
+      printf '%s\n' 'fixture Flux install asset v2.9.3'
+      ;;
+    https://github.com/fluxcd/flux2/releases/download/v2.9.3/crd-schemas.tar.gz)
+      printf '%s\n' 'fixture Flux schema asset v2.9.3'
+      ;;
+    *)
+      exit 22
+      ;;
+  esac
+SH
+FileUtils.chmod(0o755, FAKE_CURL)
 
 def run_command(*command, env: {})
   validator = command.any? { |part| part.to_s.end_with?("validate-flux-ownership.rb") }
-  inherited = validator ? {"FLUX_OWNERSHIP_KUBECTL" => FAKE_KUBECTL} : {}
+  inherited = validator ? {"FLUX_OWNERSHIP_KUBECTL" => FAKE_KUBECTL, "FLUX_OWNERSHIP_CURL" => FAKE_CURL} : {}
   Open3.capture3(inherited.merge(env), *command, chdir: ROOT)
 end
 
@@ -210,7 +230,7 @@ def write_flux_bootstrap_fixture(temporary_root, source_url: "https://github.com
       components:
         path: clusters/home/flux-system/gotk-components.yaml
         sourceUrl: https://github.com/fluxcd/flux2/releases/download/v2.9.3/install.yaml
-        sourceSha256: aa0bd71dbc4bed916b9cafa850c4618f341c74c580832c613dca04a067ee7281
+        sourceSha256: #{Digest::SHA256.hexdigest(FIXTURE_INSTALL_ASSET)}
         sha256: #{components_sha}
         controllers:
           - name: source-controller
@@ -223,7 +243,7 @@ def write_flux_bootstrap_fixture(temporary_root, source_url: "https://github.com
           - source-controller-flux-system
       schemas:
         sourceUrl: https://github.com/fluxcd/flux2/releases/download/v2.9.3/crd-schemas.tar.gz
-        sourceSha256: 91a555810a37a61b021d0a7334d5623783d267a7ecbbff7d5a00e8c7df9c0d33
+        sourceSha256: #{Digest::SHA256.hexdigest(FIXTURE_SCHEMA_ASSET)}
         directory: .github/schemas/flux/v2.9.3/v1.36.0-standalone-strict
         files:
           - path: gitrepository-source-v1.json
@@ -871,6 +891,8 @@ Dir.mktmpdir("flux-bootstrap-validation-test") do |temporary_root|
   original_sync = File.read(sync_path)
   policy_path = File.join(temporary_root, ".github/manifest-policy.yaml")
   original_policy = File.read(policy_path)
+  components_path = File.join(temporary_root, "clusters/home/flux-system/gotk-components.yaml")
+  original_components = File.read(components_path)
   package_sync_path = File.join(temporary_root, "clusters/home/flux-system/sync.yaml")
   original_package_sync = File.read(package_sync_path)
   root_render_path = File.join(temporary_root, "clusters/home/rendered.out")
@@ -885,6 +907,17 @@ Dir.mktmpdir("flux-bootstrap-validation-test") do |temporary_root|
   stdout, stderr = assert_failure("ruby", validator, temporary_root)
   assert((stdout + stderr).include?("components sourceUrl must be pinned to v2.9.3"), "floating Flux components URL was accepted")
   File.write(policy_path, original_policy)
+
+  File.write(policy_path, original_policy.sub(Digest::SHA256.hexdigest(FIXTURE_INSTALL_ASSET), "f" * 64))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("upstream artifact checksum mismatch"), "incorrect upstream Flux source checksum was not reported:\n#{stdout}\n#{stderr}")
+  File.write(policy_path, original_policy)
+
+  stdout, stderr = assert_failure(
+    "ruby", validator, temporary_root,
+    env: {"FLUX_OWNERSHIP_CURL" => File.join(temporary_root, "missing-curl")}
+  )
+  assert((stdout + stderr).include?("upstream artifact fetcher is unavailable"), "unavailable upstream artifact fetcher was accepted")
 
   File.write(policy_path, original_policy.sub("url: https://github.com/tauto1127/k8s-home-lab", "url: https://github.com/example/unexpected"))
   stdout, stderr = assert_failure("ruby", validator, temporary_root)
@@ -901,9 +934,39 @@ Dir.mktmpdir("flux-bootstrap-validation-test") do |temporary_root|
   assert((stdout + stderr).include?("bootstrap root path must be ./clusters/home"), "unexpected bootstrap path was accepted")
   File.write(sync_path, original_sync)
 
-  File.write(File.join(temporary_root, "clusters/home/flux-system/gotk-components.yaml"), "#{File.read(File.join(temporary_root, "clusters/home/flux-system/gotk-components.yaml"))}\n# changed\n")
+  File.write(components_path, "#{File.read(components_path)}\n# changed\n")
   stdout, stderr = assert_failure("ruby", validator, temporary_root)
   assert((stdout + stderr).include?("gotk-components checksum mismatch"), "changed bootstrap components were accepted")
+  write_flux_bootstrap_fixture(temporary_root)
+
+  extra_cluster_role = <<~YAML
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      name: unexpected-flux-system
+    rules: []
+  YAML
+  File.write(components_path, "#{original_components}#{extra_cluster_role}")
+  changed_sha = Digest::SHA256.file(components_path).hexdigest
+  File.write(policy_path, original_policy.sub(/^(        sha256: )[0-9a-f]{64}$/, "\\1#{changed_sha}"))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("ClusterRole inventory mismatch"), "unexpected Flux ClusterRole was accepted")
+  write_flux_bootstrap_fixture(temporary_root)
+
+  duplicate_crd = <<~YAML
+    ---
+    apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      name: gitrepositories.source.toolkit.fluxcd.io
+    spec: {}
+  YAML
+  File.write(components_path, "#{original_components}#{duplicate_crd}")
+  changed_sha = Digest::SHA256.file(components_path).hexdigest
+  File.write(policy_path, original_policy.sub(/^(        sha256: )[0-9a-f]{64}$/, "\\1#{changed_sha}"))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("duplicate gotk-components resource identity"), "duplicate Flux component identity was accepted")
   write_flux_bootstrap_fixture(temporary_root)
 
   File.write(package_sync_path, original_package_sync.sub("suspend: true", "suspend: false"))
@@ -933,6 +996,18 @@ Dir.mktmpdir("flux-bootstrap-validation-test") do |temporary_root|
   stdout, stderr = assert_failure("ruby", validator, temporary_root)
   assert((stdout + stderr).include?("Kustomize composition cycle"), "recursive bootstrap root was accepted")
   File.write(root_kustomization_path, original_root_kustomization)
+
+  Dir.mktmpdir("flux-bootstrap-outside-resource") do |outside_root|
+    outside_resource = File.join(outside_root, "outside.yaml")
+    File.write(outside_resource, "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: outside\n")
+    linked_resource = File.join(temporary_root, "clusters/home/linked.yaml")
+    File.symlink(outside_resource, linked_resource)
+    File.write(root_kustomization_path, original_root_kustomization.sub("- flux-system", "- flux-system\n  - linked.yaml"))
+    stdout, stderr = assert_failure("ruby", validator, temporary_root)
+    assert((stdout + stderr).include?("path escapes repository"), "external symlink file in bootstrap composition was accepted")
+    FileUtils.rm_f(linked_resource)
+    File.write(root_kustomization_path, original_root_kustomization)
+  end
 
   File.write(File.join(temporary_root, "clusters/home/render-mode"), "nonzero\n")
   stdout, stderr = assert_failure("ruby", validator, temporary_root)

@@ -23,7 +23,7 @@ clusterAdminBindings:
   - path: clusters/home/flux-system/gotk-components.yaml
     name: cluster-reconciler-flux-system
     sha256: c6e84495c3b611978d053adc40aca1e2a12af38f6e239c44a6b6c1224e01cab7
-    reason: Official Flux v2.9.3 cluster reconciler binding; the complete generated bundle is checksum-pinned and bootstrap application requires separate approval.
+    reason: Official Flux v2.9.3 cluster reconciler binding; the complete generated bundle is checksum-pinned, bootstrap application requires separate approval, and the RBAC posture must be reviewed again before workload activation.
 
 renderedFloatingImages:
   - namespace: immich

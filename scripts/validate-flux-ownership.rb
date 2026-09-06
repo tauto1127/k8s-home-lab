@@ -14,6 +14,7 @@ BOOTSTRAP_SOURCE_POLICY_KEY = "bootstrapManagedSources"
 FLUX_BOOTSTRAP_POLICY_KEY = "fluxBootstrap"
 ACTIVATION_BLOCKED = "flux.takutk.com/activation-blocked"
 KUBECTL = ENV.fetch("FLUX_OWNERSHIP_KUBECTL", "kubectl")
+CURL = ENV.fetch("FLUX_OWNERSHIP_CURL", "curl")
 KUSTOMIZATION_FILENAMES = %w[kustomization.yaml kustomization.yml Kustomization].freeze
 EXPECTED_BOOTSTRAP_SOURCE = {
   "apiVersion" => "source.toolkit.fluxcd.io/v1",
@@ -56,6 +57,28 @@ def repository_path(root, path, description)
   resolved
 rescue Errno::ENOENT
   raise "#{description}: path is missing: #{path}"
+end
+
+def verify_remote_sha256!(url, expected_sha, description, failures)
+  stdout, _stderr, status = Open3.capture3(
+    CURL,
+    "--fail",
+    "--silent",
+    "--show-error",
+    "--location",
+    "--proto", "=https",
+    "--proto-redir", "=https",
+    "--tlsv1.2",
+    "--connect-timeout", "10",
+    "--max-time", "60",
+    "--", url
+  )
+  raise "#{description}: upstream artifact fetch failed" unless status.success?
+
+  actual_sha = Digest::SHA256.hexdigest(stdout.b)
+  failures << "#{description}: upstream artifact checksum mismatch" unless actual_sha == expected_sha
+rescue Errno::ENOENT
+  raise "#{description}: upstream artifact fetcher is unavailable (#{CURL})"
 end
 
 def resource_documents(document)
@@ -109,7 +132,7 @@ def validate_kustomize_composition!(root, package_dir)
       next unless resource.is_a?(String)
       next if resource.match?(%r{\Ahttps?://})
 
-      target = directory.join(resource).cleanpath
+      target = repository_path(root, directory.join(resource).cleanpath, "Kustomize composition resource")
       next unless target.directory?
 
       walk.call(target)
@@ -161,7 +184,8 @@ end
 
 def validate_components!(root, bootstrap, failures)
   version = bootstrap["version"].to_s
-  unless version.match?(/\Av\d+\.\d+\.\d+\z/)
+  version_valid = version.match?(/\Av\d+\.\d+\.\d+\z/)
+  unless version_valid
     failures << "fluxBootstrap.version must be an exact vMAJOR.MINOR.PATCH"
   end
 
@@ -171,10 +195,14 @@ def validate_components!(root, bootstrap, failures)
   components = bootstrap["components"]
   raise "fluxBootstrap.components must be a mapping" unless components.is_a?(Hash)
   expected_source_url = "https://github.com/fluxcd/flux2/releases/download/#{version}/install.yaml"
-  unless components["sourceUrl"] == expected_source_url
+  source_url_valid = components["sourceUrl"] == expected_source_url
+  unless source_url_valid
     failures << "fluxBootstrap components sourceUrl must be pinned to #{version}: #{expected_source_url}"
   end
-  unless components["sourceSha256"].to_s.match?(/\A[0-9a-f]{64}\z/)
+  components_source_sha = components["sourceSha256"].to_s
+  if components_source_sha.match?(/\A[0-9a-f]{64}\z/)
+    verify_remote_sha256!(expected_source_url, components_source_sha, "Flux install.yaml", failures) if version_valid && source_url_valid
+  else
     failures << "fluxBootstrap.components.sourceSha256 must be an exact lowercase SHA256"
   end
 
@@ -186,9 +214,15 @@ def validate_components!(root, bootstrap, failures)
   failures << "gotk-components checksum mismatch: #{relative_path}" unless Digest::SHA256.file(path).hexdigest == expected_sha
 
   documents = yaml_file_documents(path)
-  identities = documents.flat_map { |document| resource_documents(document) }.map do |document|
+  identity_list = documents.flat_map { |document| resource_documents(document) }.map do |document|
     required_identity(document, path.to_s)
-  end.to_set
+  end
+  duplicate_identities = identity_list.each_with_object(Hash.new(0)) { |identity, counts| counts[identity] += 1 }
+    .select { |_identity, count| count > 1 }.keys
+  if duplicate_identities.any?
+    failures << "duplicate gotk-components resource identity: #{duplicate_identities.sort.join(', ')}"
+  end
+  identities = identity_list.to_set
   inventory = component_inventory(documents)
 
   expected_controllers = Array(components["controllers"])
@@ -207,14 +241,18 @@ def validate_components!(root, bootstrap, failures)
   failures << "unexpected Flux controllers in gotk-components: #{unexpected_controllers.to_a.sort.join(', ')}" if unexpected_controllers.any?
 
   {
-    "requiredCRDs" => "crds",
-    "requiredClusterRoles" => "clusterRoles",
-    "requiredClusterRoleBindings" => "clusterRoleBindings"
+    "requiredCRDs" => ["crds", "CRD"],
+    "requiredClusterRoles" => ["clusterRoles", "ClusterRole"],
+    "requiredClusterRoleBindings" => ["clusterRoleBindings", "ClusterRoleBinding"]
   }.each do |policy_key, inventory_key|
     expected = Array(components[policy_key])
     raise "fluxBootstrap.components.#{policy_key} must not be empty" if expected.empty?
-    missing = expected.to_set - inventory[inventory_key]
-    failures << "gotk-components is missing #{policy_key}: #{missing.to_a.sort.join(', ')}" if missing.any?
+    expected_set = expected.to_set
+    failures << "duplicate fluxBootstrap.components.#{policy_key} entry" unless expected.length == expected_set.length
+    actual_set = inventory.fetch(inventory_key.first)
+    unless actual_set == expected_set
+      failures << "gotk-components #{inventory_key.last} inventory mismatch: expected #{expected_set.to_a.sort.join(', ')}; found #{actual_set.to_a.sort.join(', ')}"
+    end
   end
 
   identities
@@ -222,12 +260,17 @@ end
 
 def validate_flux_schemas!(root, bootstrap, failures)
   version = bootstrap["version"].to_s
+  version_valid = version.match?(/\Av\d+\.\d+\.\d+\z/)
   schemas = bootstrap["schemas"]
   raise "fluxBootstrap.schemas must be a mapping" unless schemas.is_a?(Hash)
 
   expected_source_url = "https://github.com/fluxcd/flux2/releases/download/#{version}/crd-schemas.tar.gz"
-  failures << "fluxBootstrap schemas sourceUrl must be pinned to #{version}: #{expected_source_url}" unless schemas["sourceUrl"] == expected_source_url
-  unless schemas["sourceSha256"].to_s.match?(/\A[0-9a-f]{64}\z/)
+  source_url_valid = schemas["sourceUrl"] == expected_source_url
+  failures << "fluxBootstrap schemas sourceUrl must be pinned to #{version}: #{expected_source_url}" unless source_url_valid
+  schemas_source_sha = schemas["sourceSha256"].to_s
+  if schemas_source_sha.match?(/\A[0-9a-f]{64}\z/)
+    verify_remote_sha256!(expected_source_url, schemas_source_sha, "Flux crd-schemas.tar.gz", failures) if version_valid && source_url_valid
+  else
     failures << "fluxBootstrap.schemas.sourceSha256 must be an exact lowercase SHA256"
   end
 

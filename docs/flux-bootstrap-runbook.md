@@ -4,7 +4,9 @@
 
 ## Phase boundary
 
-このrunbookが扱うのはFlux CRD/controllerのinstallと、GitRepository/root Kustomizationの作成までである。rootは`clusters/home/flux-system/`だけを構成し、4つのworkload package Kustomizationを停止状態で作成する。ESO、CSI、Nextcloudのactivation、prune有効化、既存Helm release adoptionは扱わない。
+このrunbookが扱うのはFlux CRD/controllerのinstallと、GitRepository/root Kustomizationの作成までである。rootは`clusters/home/flux-system/`だけを構成し、4つのworkload package Kustomizationを停止状態で作成する。停止中のpackageは中身をrender/applyしないため、この段階では3つのHelmReleaseやNextcloudのExternalSecretはclusterに作成されない。ESO、CSI、Nextcloudのactivation、prune有効化、既存Helm release adoptionは扱わない。
+
+`flux.takutk.com/activation-blocked`はrepository validatorが確認するCI markerであり、Flux nativeの強制機構ではない。権限を持つ人がNextcloudの外側Kustomizationを手動でresume/patchすると、内側HelmReleaseが停止中でもExternalSecretが適用され得る。そのためCLI `flux resume`と手動unsuspendは禁止し、Nextcloudの将来activation前にはSecret適用を独立phase/packageへ分離するか、admission policyで同時承認を強制する別設計を必須とする。
 
 ## Preflight（read-only）
 
@@ -46,14 +48,16 @@
    ssh kube 'kubectl diff -f -' < clusters/home/flux-system/gotk-sync.yaml
    ```
 
+5. `cluster-reconciler-flux-system` ClusterRoleBindingが、公式生成物どおり`cluster-admin`を`kustomize-controller`と`helm-controller`へ付与することを承認者が明示確認する。このbootstrap PRはleast privilegeを証明しない。workload activation前に、Flux multi-tenancy lockdownを採用するか、single-tenant clusterとしてこの権限を継続する判断を別レビューで明示承認する。
+
 期待diffは次だけである。
 
 - `flux-system` Namespace、Flux `v2.9.3`のCRD/controller/RBAC/network policy
 - credentialを持たない`flux-system/flux-system` GitRepository
 - `./clusters/home`、`prune: false`の`flux-system/flux-system` root Kustomization
 - root reconciliation後に、4つのpackage Kustomizationが`suspend: true`、`prune: false`で存在する
-- 3つのHelmReleaseが`suspend: true`で存在する
-- Nextcloudの外側・内側activation gateが`"true"`のままである
+- packageが停止中なので、3つのHelmReleaseを含むpackage内resourceはまだ作成されない
+- Nextcloudは外側Kustomizationのactivation gateが`"true"`で、内側HelmReleaseはまだ作成されない（Git上では内側gateも`"true"`のまま）
 
 ## Future install/bootstrap（明示承認後のみ）
 
@@ -81,8 +85,9 @@ ssh kube 'kubectl wait -n flux-system --for=condition=Ready kustomization/flux-s
 - diffに既存workloadの更新・削除、Secret data、`prune: true`、packageの`suspend: false`が含まれる
 - controller、GitRepository、root Kustomizationが各timeout内にReadyにならない
 - rootのinventoryに`clusters/home/packages/*`のworkload objectが直接現れる
-- 4つのpackage Kustomizationまたは3つのHelmReleaseの停止状態が崩れる
-- Nextcloudのどちらかのactivation gateが欠ける
+- 4つのpackage Kustomizationの停止状態が崩れる、またはpackage由来のHelmReleaseが1つでも作成される
+- Nextcloudの外側activation gateがcluster上で欠ける、またはGit上の外側・内側gateのどちらかが欠ける
+- 公式生成物の`cluster-admin`付与範囲を承認者が確認していない
 - 認証、source取得、RBAC、admission、ownership collisionのerrorが出る
 
 緊急停止が必要な場合、次のpatchはcluster writeであり、別の明示承認後にだけ使う。rootを停止した後もpackageはGit上の`suspend: true`を正とする。
@@ -96,11 +101,11 @@ ssh kube 'kubectl patch -n flux-system kustomization flux-system --type=merge -p
 ```bash
 ssh kube 'kubectl get deployment -n flux-system -o custom-columns=NAME:.metadata.name,READY:.status.readyReplicas,AVAILABLE:.status.availableReplicas,IMAGE:.spec.template.spec.containers[0].image'
 ssh kube 'kubectl get gitrepository -n flux-system flux-system -o custom-columns=NAME:.metadata.name,URL:.spec.url,BRANCH:.spec.ref.branch,READY:.status.conditions[0].status,REASON:.status.conditions[0].reason'
-ssh kube 'kubectl get kustomization -n flux-system -o custom-columns=NAME:.metadata.name,PATH:.spec.path,SUSPEND:.spec.suspend,PRUNE:.spec.prune,READY:.status.conditions[0].status'
-ssh kube 'kubectl get helmrelease -A -o custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name,SUSPEND:.spec.suspend,BLOCKED:.metadata.annotations.flux\\.takutk\\.com/activation-blocked'
+ssh kube 'kubectl get kustomization -n flux-system -o custom-columns=NAME:.metadata.name,PATH:.spec.path,SUSPEND:.spec.suspend,PRUNE:.spec.prune,BLOCKED:.metadata.annotations.flux\.takutk\.com/activation-blocked,READY:.status.conditions[0].status'
+ssh kube 'kubectl get helmrelease -A -o custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name,SUSPEND:.spec.suspend,BLOCKED:.metadata.annotations.flux\.takutk\.com/activation-blocked'
 ```
 
-期待状態は、rootだけがreconcile可能、package Kustomizationはすべて`suspend: true`/`prune: false`、HelmReleaseはすべて`suspend: true`、Nextcloudはblockedである。「controllerがAvailable」と「bootstrap/rootがReady」は、workload activation成功を意味しない。
+期待状態は、rootだけがreconcile可能、package Kustomizationはすべて`suspend: true`/`prune: false`、Nextcloudの外側gateは`true`である。HelmRelease queryは対象0件が正しく、package activation後に初めて各HelmReleaseの停止状態を検証する。「controllerがAvailable」と「bootstrap/rootがReady」は、workload activation成功を意味しない。
 
 ## Rollback / uninstall considerations
 
