@@ -2,18 +2,37 @@
 # frozen_string_literal: true
 
 require "fileutils"
+require "base64"
 require "digest"
 require "json"
 require "open3"
+require "rubygems/package"
+require "stringio"
 require "tmpdir"
+require "zlib"
+
+def build_fixture_schema_archive
+  buffer = StringIO.new("".b)
+  gzip = Zlib::GzipWriter.new(buffer)
+  gzip.mtime = 0
+  Gem::Package::TarWriter.new(gzip) do |archive|
+    content = "{}\n"
+    archive.add_file_simple("gitrepository-source-v1.json", 0o644, content.bytesize) do |entry|
+      entry.write(content)
+    end
+  end
+  gzip.close
+  buffer.string
+end
 
 ROOT = File.expand_path("..", __dir__)
 FIXTURES = File.join(__dir__, "fixtures")
 FAKE_KUBECTL_DIR = Dir.mktmpdir("flux-ownership-kubectl")
 FAKE_KUBECTL = File.join(FAKE_KUBECTL_DIR, "kubectl")
 FAKE_CURL = File.join(FAKE_KUBECTL_DIR, "curl")
+FAKE_FLUX = File.join(FAKE_KUBECTL_DIR, "flux")
 FIXTURE_INSTALL_ASSET = "fixture Flux install asset v2.9.3\n"
-FIXTURE_SCHEMA_ASSET = "fixture Flux schema asset v2.9.3\n"
+FIXTURE_SCHEMA_ASSET = build_fixture_schema_archive
 File.write(FAKE_KUBECTL, <<~'SH')
   #!/usr/bin/env bash
   set -euo pipefail
@@ -38,7 +57,7 @@ File.write(FAKE_KUBECTL, <<~'SH')
   fi
 SH
 FileUtils.chmod(0o755, FAKE_KUBECTL)
-File.write(FAKE_CURL, <<~'SH')
+fake_curl_script = <<~'SH'
   #!/usr/bin/env bash
   set -euo pipefail
   url="${!#}"
@@ -47,18 +66,31 @@ File.write(FAKE_CURL, <<~'SH')
       printf '%s\n' 'fixture Flux install asset v2.9.3'
       ;;
     https://github.com/fluxcd/flux2/releases/download/v2.9.3/crd-schemas.tar.gz)
-      printf '%s\n' 'fixture Flux schema asset v2.9.3'
+      ruby -rbase64 -e 'STDOUT.binmode; STDOUT.write(Base64.strict_decode64(ARGV.fetch(0)))' '__FIXTURE_SCHEMA_ARCHIVE__'
       ;;
     *)
       exit 22
       ;;
   esac
 SH
+fake_curl_script = fake_curl_script.sub("__FIXTURE_SCHEMA_ARCHIVE__", Base64.strict_encode64(FIXTURE_SCHEMA_ASSET))
+File.write(FAKE_CURL, fake_curl_script)
 FileUtils.chmod(0o755, FAKE_CURL)
+File.write(FAKE_FLUX, <<~'SH')
+  #!/usr/bin/env bash
+  set -euo pipefail
+  test "$*" = 'install --version=v2.9.3 --components=source-controller,kustomize-controller,helm-controller,notification-controller --namespace=flux-system --export'
+  cat .flux-test/generated-components.yaml
+SH
+FileUtils.chmod(0o755, FAKE_FLUX)
 
 def run_command(*command, env: {})
   validator = command.any? { |part| part.to_s.end_with?("validate-flux-ownership.rb") }
-  inherited = validator ? {"FLUX_OWNERSHIP_KUBECTL" => FAKE_KUBECTL, "FLUX_OWNERSHIP_CURL" => FAKE_CURL} : {}
+  inherited = validator ? {
+    "FLUX_OWNERSHIP_KUBECTL" => FAKE_KUBECTL,
+    "FLUX_OWNERSHIP_CURL" => FAKE_CURL,
+    "FLUX_OWNERSHIP_FLUX" => FAKE_FLUX
+  } : {}
   Open3.capture3(inherited.merge(env), *command, chdir: ROOT)
 end
 
@@ -88,6 +120,7 @@ def write_flux_bootstrap_fixture(temporary_root, source_url: "https://github.com
   FileUtils.mkdir_p(flux_system)
   FileUtils.mkdir_p(package)
   FileUtils.mkdir_p(File.join(temporary_root, ".github"))
+  FileUtils.mkdir_p(File.join(temporary_root, ".flux-test"))
   schema_directory = File.join(temporary_root, ".github/schemas/flux/v2.9.3/v1.36.0-standalone-strict")
   FileUtils.mkdir_p(schema_directory)
   schema_content = "{}\n"
@@ -142,6 +175,7 @@ def write_flux_bootstrap_fixture(temporary_root, source_url: "https://github.com
   YAML
   components_path = File.join(flux_system, "gotk-components.yaml")
   File.write(components_path, components)
+  File.write(File.join(temporary_root, ".flux-test/generated-components.yaml"), components)
   components_sha = Digest::SHA256.hexdigest(components)
 
   root_suspend_line = root_suspend.nil? ? "" : "  suspend: #{root_suspend}\n"
@@ -939,6 +973,19 @@ Dir.mktmpdir("flux-bootstrap-validation-test") do |temporary_root|
   assert((stdout + stderr).include?("gotk-components checksum mismatch"), "changed bootstrap components were accepted")
   write_flux_bootstrap_fixture(temporary_root)
 
+  File.write(components_path, "#{original_components}\n# content not produced by the pinned Flux CLI\n")
+  changed_sha = Digest::SHA256.file(components_path).hexdigest
+  File.write(policy_path, original_policy.sub(/^(        sha256: )[0-9a-f]{64}$/, "\\1#{changed_sha}"))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("does not match pinned Flux CLI generation"), "components unrelated to pinned Flux CLI generation were accepted")
+  write_flux_bootstrap_fixture(temporary_root)
+
+  stdout, stderr = assert_failure(
+    "ruby", validator, temporary_root,
+    env: {"FLUX_OWNERSHIP_FLUX" => File.join(temporary_root, "missing-flux")}
+  )
+  assert((stdout + stderr).include?("pinned Flux generator is unavailable"), "unavailable pinned Flux generator was accepted")
+
   extra_cluster_role = <<~YAML
     ---
     apiVersion: rbac.authorization.k8s.io/v1
@@ -967,6 +1014,16 @@ Dir.mktmpdir("flux-bootstrap-validation-test") do |temporary_root|
   File.write(policy_path, original_policy.sub(/^(        sha256: )[0-9a-f]{64}$/, "\\1#{changed_sha}"))
   stdout, stderr = assert_failure("ruby", validator, temporary_root)
   assert((stdout + stderr).include?("duplicate gotk-components resource identity"), "duplicate Flux component identity was accepted")
+  write_flux_bootstrap_fixture(temporary_root)
+
+  schema_path = File.join(temporary_root, ".github/schemas/flux/v2.9.3/v1.36.0-standalone-strict/gitrepository-source-v1.json")
+  changed_schema = "{ }\n"
+  File.write(schema_path, changed_schema)
+  changed_schema_sha = Digest::SHA256.hexdigest(changed_schema)
+  original_schema_sha = Digest::SHA256.hexdigest("{}\n")
+  File.write(policy_path, original_policy.sub(original_schema_sha, changed_schema_sha))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("does not match upstream schema archive"), "schema unrelated to the pinned upstream archive was accepted")
   write_flux_bootstrap_fixture(temporary_root)
 
   File.write(package_sync_path, original_package_sync.sub("suspend: true", "suspend: false"))

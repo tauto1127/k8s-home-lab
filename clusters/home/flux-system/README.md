@@ -43,7 +43,7 @@ aqua exec -- flux create kustomization flux-system \
   --export
 ```
 
-version、artifact URL/checksum、controller image、bootstrap source/root、offline schema inventoryは`.github/manifest-policy.yaml`と`scripts/validate-flux-ownership.rb`がfail-closedで検証する。validatorは固定HTTPS URLからupstream artifactを取得し、記録したSHA256と実bytesを照合する。適用手順と停止条件は`docs/flux-bootstrap-runbook.md`を参照する。
+version、artifact URL/checksum、controller image、bootstrap source/root、offline schema inventoryは`.github/manifest-policy.yaml`と`scripts/validate-flux-ownership.rb`がfail-closedで検証する。validatorは固定HTTPS URLからupstream artifactを取得して記録したSHA256と照合し、repository-pinned Flux CLIで上記コマンドを再実行して`gotk-components.yaml`をbyte比較する。適用手順と停止条件は`docs/flux-bootstrap-runbook.md`を参照する。
 
 ## Activation boundary
 

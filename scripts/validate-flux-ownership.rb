@@ -5,7 +5,10 @@ require "open3"
 require "pathname"
 require "set"
 require "digest"
+require "rubygems/package"
+require "stringio"
 require "yaml"
+require "zlib"
 
 root = Pathname.new(ARGV.fetch(0, File.expand_path("..", __dir__))).realpath
 failures = []
@@ -15,6 +18,7 @@ FLUX_BOOTSTRAP_POLICY_KEY = "fluxBootstrap"
 ACTIVATION_BLOCKED = "flux.takutk.com/activation-blocked"
 KUBECTL = ENV.fetch("FLUX_OWNERSHIP_KUBECTL", "kubectl")
 CURL = ENV.fetch("FLUX_OWNERSHIP_CURL", "curl")
+FLUX = ENV.fetch("FLUX_OWNERSHIP_FLUX", "flux")
 KUSTOMIZATION_FILENAMES = %w[kustomization.yaml kustomization.yml Kustomization].freeze
 EXPECTED_BOOTSTRAP_SOURCE = {
   "apiVersion" => "source.toolkit.fluxcd.io/v1",
@@ -76,9 +80,54 @@ def verify_remote_sha256!(url, expected_sha, description, failures)
   raise "#{description}: upstream artifact fetch failed" unless status.success?
 
   actual_sha = Digest::SHA256.hexdigest(stdout.b)
-  failures << "#{description}: upstream artifact checksum mismatch" unless actual_sha == expected_sha
+  unless actual_sha == expected_sha
+    failures << "#{description}: upstream artifact checksum mismatch"
+    return nil
+  end
+  stdout.b
 rescue Errno::ENOENT
   raise "#{description}: upstream artifact fetcher is unavailable (#{CURL})"
+end
+
+def validate_regenerated_components!(root, path, version, failures)
+  stdout, _stderr, status = Open3.capture3(
+    FLUX,
+    "install",
+    "--version=#{version}",
+    "--components=source-controller,kustomize-controller,helm-controller,notification-controller",
+    "--namespace=flux-system",
+    "--export",
+    chdir: root.to_s
+  )
+  raise "gotk-components: pinned Flux generator failed" unless status.success?
+  unless stdout.b == File.binread(path)
+    failures << "gotk-components does not match pinned Flux CLI generation"
+  end
+rescue Errno::ENOENT
+  raise "gotk-components: pinned Flux generator is unavailable (#{FLUX})"
+end
+
+def schema_archive_files(bytes, description)
+  files = {}
+  gzip = Zlib::GzipReader.new(StringIO.new(bytes))
+  archive = Gem::Package::TarReader.new(gzip)
+  archive.each do |entry|
+    next unless entry.file?
+
+    name = entry.full_name.sub(%r{\A\./}, "")
+    path = Pathname.new(name)
+    if name.empty? || path.absolute? || path.each_filename.include?("..")
+      raise "#{description}: unsafe archive path"
+    end
+    raise "#{description}: duplicate archive file #{name}" if files.key?(name)
+    files[name] = entry.read.b
+  end
+  files
+rescue Zlib::GzipFile::Error, Gem::Package::TarInvalidError, EOFError
+  raise "#{description}: invalid archive"
+ensure
+  archive&.close
+  gzip&.close
 end
 
 def resource_documents(document)
@@ -212,6 +261,7 @@ def validate_components!(root, bootstrap, failures)
   expected_sha = components["sha256"].to_s
   failures << "fluxBootstrap.components.sha256 must be an exact lowercase SHA256" unless expected_sha.match?(/\A[0-9a-f]{64}\z/)
   failures << "gotk-components checksum mismatch: #{relative_path}" unless Digest::SHA256.file(path).hexdigest == expected_sha
+  validate_regenerated_components!(root, path, version, failures) if version_valid
 
   documents = yaml_file_documents(path)
   identity_list = documents.flat_map { |document| resource_documents(document) }.map do |document|
@@ -268,8 +318,11 @@ def validate_flux_schemas!(root, bootstrap, failures)
   source_url_valid = schemas["sourceUrl"] == expected_source_url
   failures << "fluxBootstrap schemas sourceUrl must be pinned to #{version}: #{expected_source_url}" unless source_url_valid
   schemas_source_sha = schemas["sourceSha256"].to_s
+  archive_bytes = nil
   if schemas_source_sha.match?(/\A[0-9a-f]{64}\z/)
-    verify_remote_sha256!(expected_source_url, schemas_source_sha, "Flux crd-schemas.tar.gz", failures) if version_valid && source_url_valid
+    if version_valid && source_url_valid
+      archive_bytes = verify_remote_sha256!(expected_source_url, schemas_source_sha, "Flux crd-schemas.tar.gz", failures)
+    end
   else
     failures << "fluxBootstrap.schemas.sourceSha256 must be an exact lowercase SHA256"
   end
@@ -284,6 +337,7 @@ def validate_flux_schemas!(root, bootstrap, failures)
 
   entries = Array(schemas["files"])
   raise "fluxBootstrap.schemas.files must not be empty" if entries.empty?
+  upstream_files = archive_bytes ? schema_archive_files(archive_bytes, "Flux crd-schemas.tar.gz") : {}
   expected_files = Set.new
   entries.each do |entry|
     raise "fluxBootstrap.schemas.files entries must be mappings" unless entry.is_a?(Hash)
@@ -294,6 +348,14 @@ def validate_flux_schemas!(root, bootstrap, failures)
     failures << "duplicate Flux schema policy entry: #{filename}" unless expected_files.add?(filename)
     path = repository_path(root, directory.join(filename).cleanpath, "Flux schema")
     failures << "Flux schema checksum mismatch: #{filename}" unless Digest::SHA256.file(path).hexdigest == expected_sha
+    if archive_bytes
+      upstream_content = upstream_files[filename]
+      if upstream_content.nil?
+        failures << "Flux schema #{filename} is missing from upstream schema archive"
+      elsif File.binread(path) != upstream_content
+        failures << "Flux schema #{filename} does not match upstream schema archive"
+      end
+    end
   end
 
   actual_files = directory.glob("*.json").select(&:file?).map { |path| path.basename.to_s }.to_set
