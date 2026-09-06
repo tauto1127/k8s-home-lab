@@ -27,7 +27,7 @@ manifest、Helm values/manifestは取得・保存していない。Flux bootstra
 
 ## PR2で証明していないlive-only/reference項目
 
-PR2のNextcloud valuesは不完全であり、既存releaseをupgradeするとchart defaultsへ戻る危険がある。Ingress/PVC/NFS/Service/cron/probes/TLS、既存Helm release adoption、rendered child resourceの完全parityが未証明のため、Nextcloudはactivation runbookから除外し、`flux.takut.dev/activation-blocked: "true"`のfail-closed gateで停止する。Secret値を取得せず完全parityを証明できない場合、valuesを補完しない。
+PR2のNextcloud valuesは不完全であり、既存releaseをupgradeするとchart defaultsへ戻る危険がある。Ingress/PVC/NFS/Service/cron/probes/TLS、既存Helm release adoption、rendered child resourceの完全parityが未証明のため、Nextcloudはactivation runbookから除外し、`flux.takutk.com/activation-blocked: "true"`のfail-closed gateで停止する。Secret値を取得せず完全parityを証明できない場合、valuesを補完しない。
 
 | 項目 | live/reference情報 | 判定 |
 | --- | --- | --- |

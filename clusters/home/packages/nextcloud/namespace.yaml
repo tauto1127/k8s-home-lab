@@ -4,4 +4,4 @@ metadata:
   name: nextcloud
   labels:
     flux.takut.dev/owner: nextcloud
-    flux.takut.dev/activation-blocked: "true"
+    flux.takutk.com/activation-blocked: "true"

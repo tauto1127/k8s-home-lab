@@ -4,7 +4,7 @@
 
 すべてのFlux Kustomizationは`suspend: true`、`prune: false`、すべてのHelmReleaseは`suspend: true`を維持する。activationはCLIの`flux resume`ではなく、別PRのGit commitで、外側Flux Kustomizationと内側HelmReleaseのsuspendを同じactivation changeでfalseにする。root reconciliationはCLIで一時resumeしても、Git上の`suspend: true`へ戻す。
 
-依存順はESO controller → ESO config（ClusterSecretStore/ExternalSecret）→ CSIである。NextcloudはIngress/PVC/NFS/Service/cron/probes/TLS、既存Helm release adoption、rendered child resource、Secretを読まないmetadata parityを含む完全parityが独立証明されるまでactivation対象外で、`flux.takut.dev/activation-blocked: "true"`を機械検証するfail-closed gateがある。`createNamespace: true`はHelmRelease CR自身のnamespaceを作成しないため、external-secretsとnextcloudのNamespace desired manifestをcontroller/nextcloud packageが所有する。
+依存順はESO controller → ESO config（ClusterSecretStore/ExternalSecret）→ CSIである。NextcloudはIngress/PVC/NFS/Service/cron/probes/TLS、既存Helm release adoption、rendered child resource、Secretを読まないmetadata parityを含む完全parityが独立証明されるまでactivation対象外で、`flux.takutk.com/activation-blocked: "true"`を機械検証するfail-closed gateがある。`createNamespace: true`はHelmRelease CR自身のnamespaceを作成しないため、external-secretsとnextcloudのNamespace desired manifestをcontroller/nextcloud packageが所有する。
 
 ## Activation boundary
 

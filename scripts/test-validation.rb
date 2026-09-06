@@ -8,9 +8,30 @@ require "tmpdir"
 
 ROOT = File.expand_path("..", __dir__)
 FIXTURES = File.join(__dir__, "fixtures")
+FAKE_KUBECTL_DIR = Dir.mktmpdir("flux-ownership-kubectl")
+FAKE_KUBECTL = File.join(FAKE_KUBECTL_DIR, "kubectl")
+File.write(FAKE_KUBECTL, <<~'SH')
+  #!/usr/bin/env bash
+  set -euo pipefail
+  test "${1:-}" = kustomize
+  package_dir="$2"
+  if test -f "$package_dir/rendered.yaml"; then
+    cat "$package_dir/rendered.yaml"
+  else
+    first=1
+    while IFS= read -r -d '' file; do
+      if test "$first" -eq 0; then printf '%s\n' '---'; fi
+      cat "$file"
+      first=0
+    done < <(find "$package_dir" -maxdepth 1 -type f -name '*.yaml' ! -name 'kustomization.yaml' -print0 | sort -z)
+  fi
+SH
+FileUtils.chmod(0o755, FAKE_KUBECTL)
 
 def run_command(*command, env: {})
-  Open3.capture3(env, *command, chdir: ROOT)
+  validator = command.any? { |part| part.to_s.end_with?("validate-flux-ownership.rb") }
+  inherited = validator ? {"FLUX_OWNERSHIP_KUBECTL" => FAKE_KUBECTL} : {}
+  Open3.capture3(inherited.merge(env), *command, chdir: ROOT)
 end
 
 def run_in_directory(directory, *command, env: {})
@@ -29,7 +50,7 @@ end
 
 def assert_failure(*command, env: {})
   stdout, stderr, status = run_command(*command, env: env)
-  assert(!status.success?, "expected failure: #{command.join(' ')}")
+  assert(!status.success?, "expected failure: #{command.join(' ')}\n#{stdout}\n#{stderr}")
   [stdout, stderr]
 end
 
@@ -380,8 +401,11 @@ Dir.mktmpdir("flux-ownership-test") do |temporary_root|
     kind: Kustomization
     resources: [resource.yaml, resource.yaml]
     YAML
+  resource = File.read(File.join(temporary_root, "clusters/home/packages/a/resource.yaml"))
+  File.write(File.join(temporary_root, "clusters/home/packages/a/rendered.yaml"), "#{resource}---\n#{resource}")
   stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
   assert((stdout + stderr).include?("duplicate Flux-owned object"), "Flux ownership validator accepted a same-owner duplicate")
+  FileUtils.rm_f(File.join(temporary_root, "clusters/home/packages/a/rendered.yaml"))
   File.write(File.join(temporary_root, "clusters/home/packages/a/kustomization.yaml"), <<~YAML)
     apiVersion: kustomize.config.k8s.io/v1beta1
     kind: Kustomization
@@ -480,6 +504,161 @@ Dir.mktmpdir("flux-reference-validation-test") do |temporary_root|
   File.write(File.join(temporary_root, "clusters/pkg/release.yaml"), File.read(File.join(temporary_root, "clusters/pkg/release.yaml")).sub("name: charts", "name: missing"))
   stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
   assert((stdout + stderr).include?("HelmRepository sourceRef is missing or mismatched"), "missing HelmRepository was accepted")
+end
+
+Dir.mktmpdir("flux-render-and-gate-validation-test") do |temporary_root|
+  FileUtils.mkdir_p(File.join(temporary_root, "clusters/flux"))
+  FileUtils.mkdir_p(File.join(temporary_root, ".github"))
+  File.write(File.join(temporary_root, ".github/manifest-policy.yaml"), "bootstrapManagedSources:\n  - apiVersion: source.toolkit.fluxcd.io/v1\n    kind: GitRepository\n    namespace: flux-system\n    name: flux-system\n")
+  FileUtils.mkdir_p(File.join(temporary_root, "clusters/pkg"))
+  File.write(File.join(temporary_root, "clusters/pkg/kustomization.yaml"), "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: [rendered.yaml]\n")
+  File.write(File.join(temporary_root, "clusters/pkg/rendered.yaml"), <<~YAML)
+    apiVersion: source.toolkit.fluxcd.io/v1
+    kind: HelmRepository
+    metadata:
+      name: charts
+      namespace: flux-system
+    spec:
+      interval: 1h
+      url: https://example.invalid
+    ---
+    apiVersion: helm.toolkit.fluxcd.io/v2
+    kind: HelmRelease
+    metadata:
+      name: nextcloud
+      namespace: nextcloud
+      annotations:
+        flux.takutk.com/activation-blocked: "true"
+    spec:
+      suspend: true
+      chart:
+        spec:
+          chart: nextcloud
+          sourceRef:
+            kind: HelmRepository
+            name: charts
+            namespace: flux-system
+  YAML
+  flux_path = File.join(temporary_root, "clusters/flux/sync.yaml")
+  valid = <<~YAML
+    apiVersion: kustomize.toolkit.fluxcd.io/v1
+    kind: Kustomization
+    metadata:
+      name: nextcloud
+      namespace: flux-system
+      annotations:
+        flux.takutk.com/activation-blocked: "true"
+    spec:
+      path: ./clusters/pkg
+      prune: false
+      suspend: true
+      sourceRef:
+        kind: GitRepository
+        name: flux-system
+  YAML
+  File.write(flux_path, valid)
+  assert_success("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+
+  File.write(File.join(temporary_root, "clusters/pkg/rendered.yaml"), File.read(File.join(temporary_root, "clusters/pkg/rendered.yaml")).sub("suspend: true", "suspend: false"))
+  stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+  assert((stdout + stderr).include?("suspend must be true"), "rendered HelmRelease suspend:false was accepted")
+  File.write(File.join(temporary_root, "clusters/pkg/rendered.yaml"), File.read(File.join(temporary_root, "clusters/pkg/rendered.yaml")).sub("suspend: false", "suspend: true"))
+
+  File.write(flux_path, valid.sub("flux.takutk.com/activation-blocked", "flux.takutk.com/activation-typo"))
+  stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+  assert((stdout + stderr).include?("activation-blocked annotation must be true"), "outer Nextcloud gate typo was accepted")
+  File.write(flux_path, valid)
+  rendered = File.read(File.join(temporary_root, "clusters/pkg/rendered.yaml"))
+  File.write(File.join(temporary_root, "clusters/pkg/rendered.yaml"), rendered.split("---").first)
+  stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+  assert((stdout + stderr).include?("Nextcloud HelmRelease is required"), "inner Nextcloud HelmRelease omission was accepted")
+end
+
+Dir.mktmpdir("flux-order-and-source-validation-test") do |temporary_root|
+  FileUtils.mkdir_p(File.join(temporary_root, "clusters/flux"))
+  FileUtils.mkdir_p(File.join(temporary_root, ".github"))
+  File.write(File.join(temporary_root, ".github/manifest-policy.yaml"), "bootstrapManagedSources: []\n")
+  %w[a b].each do |name|
+    FileUtils.mkdir_p(File.join(temporary_root, "clusters/pkg-#{name}"))
+    File.write(File.join(temporary_root, "clusters/pkg-#{name}/kustomization.yaml"), "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: [resource.yaml]\n")
+    File.write(File.join(temporary_root, "clusters/pkg-#{name}/resource.yaml"), "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: unique-#{name}\n  namespace: default\n")
+  end
+  File.write(File.join(temporary_root, "clusters/pkg-b/gitrepository.yaml"), "apiVersion: source.toolkit.fluxcd.io/v1\nkind: GitRepository\nmetadata:\n  name: declared\n  namespace: flux-system\nspec:\n  interval: 1h\n  url: https://example.invalid\n")
+  File.write(File.join(temporary_root, "clusters/flux/sync.yaml"), <<~YAML)
+    apiVersion: kustomize.toolkit.fluxcd.io/v1
+    kind: Kustomization
+    metadata:
+      name: a
+      namespace: flux-system
+    spec:
+      path: ./clusters/pkg-a
+      prune: false
+      suspend: true
+      dependsOn:
+        - name: b
+      sourceRef:
+        kind: GitRepository
+        name: declared
+        namespace: flux-system
+    ---
+    apiVersion: kustomize.toolkit.fluxcd.io/v1
+    kind: Kustomization
+    metadata:
+      name: b
+      namespace: flux-system
+    spec:
+      path: ./clusters/pkg-b
+      prune: false
+      suspend: true
+      sourceRef:
+        kind: GitRepository
+        name: declared
+        namespace: flux-system
+  YAML
+  stdout, stderr = assert_success("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+  assert(stdout.include?("Validated 2 Flux Kustomizations"), "backward dependency or declared GitRepository failed")
+
+  sync = File.read(File.join(temporary_root, "clusters/flux/sync.yaml"))
+  File.write(File.join(temporary_root, "clusters/flux/sync.yaml"), sync.sub("name: declared\n", "name: missing\n"))
+  stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+  assert((stdout + stderr).include?("neither declared in rendered packages nor explicitly allowlisted"), "undeclared GitRepository was accepted")
+
+  # Replace the second document with a two-node cycle fixture explicitly.
+  File.write(File.join(temporary_root, "clusters/flux/sync.yaml"), <<~YAML)
+    apiVersion: kustomize.toolkit.fluxcd.io/v1
+    kind: Kustomization
+    metadata:
+      name: a
+      namespace: flux-system
+    spec:
+      path: ./clusters/pkg-a
+      prune: false
+      suspend: true
+      dependsOn:
+        - name: b
+      sourceRef:
+        kind: GitRepository
+        name: declared
+        namespace: flux-system
+    ---
+    apiVersion: kustomize.toolkit.fluxcd.io/v1
+    kind: Kustomization
+    metadata:
+      name: b
+      namespace: flux-system
+    spec:
+      path: ./clusters/pkg-b
+      prune: false
+      suspend: true
+      dependsOn:
+        - name: a
+      sourceRef:
+        kind: GitRepository
+        name: declared
+        namespace: flux-system
+  YAML
+  stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+  assert((stdout + stderr).include?("dependency cycle"), "two-node dependency cycle was accepted")
 end
 
 puts "Validation fixtures passed."
