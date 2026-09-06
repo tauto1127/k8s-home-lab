@@ -67,6 +67,15 @@ allowedMissingSchemas:
   - apiVersion: external-secrets.io/v1beta1
     kind: ExternalSecret
     reason: External Secrets Operator CRD is validated by the operator/server gate.
+  - apiVersion: helm.toolkit.fluxcd.io/v2
+    kind: HelmRelease
+    reason: Flux HelmRelease CRD is validated by the Flux operator/server gate.
+  - apiVersion: source.toolkit.fluxcd.io/v1
+    kind: HelmRepository
+    reason: Flux HelmRepository CRD is validated by the Flux operator/server gate.
+  - apiVersion: kustomize.toolkit.fluxcd.io/v1
+    kind: Kustomization
+    reason: Flux Kustomization CRD is validated by the Flux operator/server gate.
   - apiVersion: metallb.io/v1beta1
     kind: IPAddressPool
     reason: MetalLB CRD is validated by the operator/server gate.
