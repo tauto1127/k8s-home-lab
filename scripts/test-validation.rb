@@ -27,6 +27,69 @@ def build_fixture_schema_archive
   buffer.string
 end
 
+def test_eso_config_validation
+  source = File.read(File.join(ROOT, "scripts/validate-flux-ownership.rb"))
+  eval(source.split(/^policy_path =/).first, TOPLEVEL_BINDING, "validate-flux-ownership.rb", 1)
+  policy = YAML.safe_load(File.read(File.join(ROOT, ".github/manifest-policy.yaml")))
+  activation = Marshal.load(Marshal.dump(policy.fetch("fluxActivation")))
+  failures = []
+  validate_activation_phase_contract!(activation, failures)
+  assert(failures.empty?, "cumulative ESO phase contract rejected the repository policy: #{failures.join('; ')}")
+
+  previous_activation = {
+    "phase" => "eso-controller",
+    "reason" => "previous controller-only activation phase",
+    "activeKustomizations" => Marshal.load(Marshal.dump(ESO_CONTROLLER_ACTIVATION_CONTRACT.fetch("activeKustomizations"))),
+    "activeHelmReleases" => Marshal.load(Marshal.dump(ESO_CONTROLLER_ACTIVATION_CONTRACT.fetch("activeHelmReleases")))
+  }
+  failures = []
+  validate_activation_phase_contract!(previous_activation, failures)
+  assert(failures.empty?, "previous eso-controller phase contract was rejected: #{failures.join('; ')}")
+
+  store = {"spec" => Marshal.load(Marshal.dump(ESO_CONFIG_STORE_SPEC))}
+  store_failures = []
+  validate_active_cluster_secret_store!(store, ESO_CONFIG_STORE_IDENTITY, {"spec" => ESO_CONFIG_STORE_SPEC}, store_failures)
+  assert(store_failures.empty?, "reviewed ClusterSecretStore spec was rejected")
+
+  mutated_store = Marshal.load(Marshal.dump(store))
+  mutated_store["spec"]["provider"]["gcpsm"]["projectID"] = "123"
+  store_failures = []
+  validate_active_cluster_secret_store!(mutated_store, ESO_CONFIG_STORE_IDENTITY, {"spec" => ESO_CONFIG_STORE_SPEC}, store_failures)
+  assert(store_failures.any? { |failure| failure.include?("spec must exactly match") }, "projectID drift was accepted")
+
+  mutated_store = Marshal.load(Marshal.dump(store))
+  mutated_store["spec"]["provider"]["gcpsm"]["auth"]["secretRef"]["secretAccessKeySecretRef"]["key"] = "wrong"
+  store_failures = []
+  validate_active_cluster_secret_store!(mutated_store, ESO_CONFIG_STORE_IDENTITY, {"spec" => ESO_CONFIG_STORE_SPEC}, store_failures)
+  assert(store_failures.any? { |failure| failure.include?("spec must exactly match") }, "credential key drift was accepted")
+
+  mutated_activation = Marshal.load(Marshal.dump(activation))
+  mutated_activation.fetch("activeKustomizations").find { |entry| entry["name"] == "eso-config" }["inventory"].clear
+  failures = []
+  validate_activation_phase_contract!(mutated_activation, failures)
+  assert(failures.any? { |failure| failure.include?("activeKustomizations contract") }, "ESO inventory drift was accepted")
+
+  mutated_activation = Marshal.load(Marshal.dump(activation))
+  mutated_activation.fetch("activeKustomizations").find { |entry| entry["name"] == "eso-config" }["path"] = "./clusters/other"
+  failures = []
+  validate_activation_phase_contract!(mutated_activation, failures)
+  assert(failures.any? { |failure| failure.include?("activeKustomizations contract") }, "ESO path drift was accepted")
+
+  mutated_activation = Marshal.load(Marshal.dump(activation))
+  mutated_activation["phase"] = "eso-controller"
+  failures = []
+  validate_activation_phase_contract!(mutated_activation, failures)
+  assert(failures.any? { |failure| failure.include?("ESO config identities must use fluxActivation phase eso-config") }, "ESO config phase bypass was accepted")
+
+  config_failures = []
+  validate_eso_config_kustomization!({"spec" => {"wait" => true, "dependsOn" => [{"name" => "eso-controller"}]}}, config_failures)
+  assert(config_failures.empty?, "reviewed ESO dependency contract was rejected")
+  config_failures = []
+  validate_eso_config_kustomization!({"spec" => {"wait" => false, "dependsOn" => [{"name" => "other"}]}}, config_failures)
+  assert(config_failures.any? { |failure| failure.include?("wait must be true") }, "wait:false was accepted")
+  assert(config_failures.any? { |failure| failure.include?("dependsOn must exactly") }, "dependency drift was accepted")
+end
+
 def build_fixture_chart_archive
   previous_source_date_epoch = ENV["SOURCE_DATE_EPOCH"]
   ENV["SOURCE_DATE_EPOCH"] = "0"
@@ -1465,4 +1528,5 @@ Dir.mktmpdir("flux-bootstrap-validation-test") do |temporary_root|
   assert((stdout + stderr).include?("Kustomize renderer is unavailable"), "unavailable bootstrap renderer was accepted")
 end
 
+test_eso_config_validation
 puts "Validation fixtures passed."

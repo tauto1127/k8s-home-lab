@@ -5,12 +5,13 @@
 この一覧は、どの定義をFluxの入力にできるかを示す。ここに記載したことは、
 Fluxが現在そのリソースを所有していることを意味しない。PR #43は停止状態の
 移行準備だった。bootstrapは別途適用済みで、2026-09-07の読み取り確認ではFluxの
-4 controllerとrootが稼働し、4 packageは停止中だった。activation PRのGit
-desiredではESO controllerだけが例外的に有効化され、outer Kustomizationとinner
-HelmReleaseがともに`suspend: false`になる。
+4 controllerとrootが稼働している。PR #46のESO controller移行はReady確認まで完了済み。
+今回のGit desiredではESO controllerとESO configが有効で、CSIとNextcloudは停止中。
+ESO configの実機移行成功はマージ後に個別に確認する。
 
 ## 分類
 
+- `flux-managed`: Fluxでのreconciliationと実機Readyを確認済みの入力。
 - `flux-candidate`: render結果とlive stateを比較したうえで、Fluxの
   `Kustomization`の管理下へ移せる宣言的な入力。
 - `migration-pending`: 所有者、権限、またはHelmReleaseへの変換について、
@@ -44,7 +45,7 @@ PVC、PV、namespace、CRD、privileged bindingは、初回移行時に
 | `apps/wordpress/mysql-deployment.yaml` | migration-pending | Gitで追跡していたroot passwordは削除済み。credentialをrotateして検証するまで、暫定的なExternalSecret参照をreconciliationしてはならない。 |
 | `middlewares/cert-manager/helmfile.yaml` | migration-pending | 依存するresourceより先にcontroller releaseを変換する。 |
 | `middlewares/couchdb/*.yaml` | flux-candidate | workload、PVC、ConfigMap、ExternalSecret、package Kustomization。 |
-| `clusters/home/packages/eso-config/clustersecretstore.yaml` | migration-pending | `ClusterSecretStore`のGit owner。controller依存が解決するまで停止する。`gcpsm-secret`のdataは外部プロビジョニング前提で取り込まない。 |
+| `clusters/home/packages/eso-config/clustersecretstore.yaml` | migration-pending | 既存`ClusterSecretStore`のGit owner。今回のdesiredではESO controllerのReadyを依存条件として有効化。specはliveと一致、移行成功はマージ後に確認する。`gcpsm-secret`のdataは取り込まない。 |
 | `middlewares/secrets-store-csi-driver/helmfile.yaml` | migration-pending | CSIの所有境界をESO directoryから分離し、live 1.4.8を移行baselineに固定する。Renovate PR #28の1.6.0は別管理。 |
 | `middlewares/grafana/grafana-external-secrets.yaml`, `kustomization.yaml` | flux-candidate | secret materialは外部に保持する。 |
 | `middlewares/grafana/helmfile.yaml` | migration-pending | render結果と比較してから変換する。 |
@@ -59,8 +60,8 @@ PVC、PV、namespace、CRD、privileged bindingは、初回移行時に
 | `pv/test-pvc.yaml` | excluded | test PVCは現在もBoundのため、cleanupは別途storageの判断が必要。 |
 | `clusters/home/flux-system/gotk-components.yaml` | bootstrap | Flux `v2.9.3`のCRD/controller/RBAC。生成物とupstream bytesのSHA256をpolicyで検証し、公式bundleの`cluster-admin`付与を含むcluster適用は別承認とする。 |
 | `clusters/home/flux-system/gotk-sync.yaml` | bootstrap | public GitRepositoryとactive root Kustomization。rootは`flux-system/`だけをcomposeし、`packages/`を直接所有しない。 |
-| `clusters/home/flux-system/sync.yaml` | migration-pending | 4つのpackage Kustomization定義。activation PRのdesiredではESO controllerのouterだけ`suspend: false`、それ以外は`suspend: true`、全て`prune: false`。 |
-| `clusters/home/packages/eso-controller/helmrelease.yaml` | migration-pending | activation PRのdesiredではinner `external-secrets`を`suspend: false`としてFlux HelmReleaseへ移す。reconcile成功までは既存live Helm releaseのowner移行を未確認とする。 |
+| `clusters/home/flux-system/sync.yaml` | migration-pending | 4つのpackage Kustomization定義。今回のdesiredではESO controller/configが`suspend: false`、CSI/Nextcloudは`suspend: true`、全て`prune: false`。 |
+| `clusters/home/packages/eso-controller/helmrelease.yaml` | flux-managed | PR #46で移行済み。初回upgrade成功、Ready、chart artifact digest一致を確認済み。 |
 
 すべてのraw `flux-candidate` packageには`kustomization.yaml`がある。Helm chartの
 templateは`helm template`後にのみ検証し、raw Kubernetes YAMLとしてはparseしない。
@@ -75,7 +76,7 @@ bindingは意図的にpackageから除外している。
 以下は2026-09-05に読み取り専用で確認した事項であり、PR1ではクラスターへ
 適用していない。
 
-- ESOのGit定義はPR #43から`clusters/home/packages/eso-controller/helmrelease.yaml`に存在する。2026-09-07のactivation PRマージ前のliveではHelmReleaseは未作成で、既存Helm release（chart `external-secrets-0.14.4`）のFlux管理への移行は未実施だった。このPRは同じreleaseのFlux reconciliationを有効にする。旧`middlewares/external-secrets-operator/helmfile.yaml`が管理していたのはESO本体ではなくSecrets Store CSI Driverである。
+- ESOのGit定義はPR #43から`clusters/home/packages/eso-controller/helmrelease.yaml`に存在し、PR #46で既存Helm release（chart `external-secrets-0.14.4`）のFlux管理への移行を完了した。2026-09-07の読み取り確認でもHelmReleaseはReadyだった。このPRはcontrollerを再度有効化するものではなく、既存の`ClusterSecretStore`だけをESO config packageでFlux管理へ移す。旧`middlewares/external-secrets-operator/helmfile.yaml`が管理していたのはESO本体ではなくSecrets Store CSI Driverである。
 - Secrets Store CSI Driverは、Gitのdesired chart versionが`1.5.1`、liveが`1.4.8`である。差分を確認してから、どちらを正本にするか決める。
 - Nextcloudはlive Helm chart `9.1.3`で、Podが使用中の`33.0.5-apache` image digestに固定した。liveはExternalSecretが生成する`nextcloud-db-secret`を参照しているため、Helmfileも同じSecret名とキーを参照し、chartの既定資格情報Secretをrenderしない。ExternalSecret自体のGit ownerとHelm chartの全valuesが一致したことまでは確認していないため、HelmRelease化は引き続き`migration-pending`とする。
 - Nextcloud valuesは不完全で、既存releaseをupgradeするとchart defaultsへ戻る危険がある。Ingress/PVC/NFS/Service/cron/probes/TLS、既存release adoptionと完全parityが証明されるまで`activation-blocked`で停止し、runbook対象外とする。Secret値を取得せず証明できない場合はvaluesを補完しない。

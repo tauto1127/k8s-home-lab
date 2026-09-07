@@ -105,6 +105,46 @@ ESO_CONTROLLER_ACTIVATION_CONTRACT = {
     "safety" => {"installCRDs" => true}
   }]
 }.freeze
+ESO_CONFIG_ACTIVATION_CONTRACT = {
+  "activeKustomizations" => ESO_CONTROLLER_ACTIVATION_CONTRACT["activeKustomizations"] + [{
+    "apiVersion" => "kustomize.toolkit.fluxcd.io/v1",
+    "kind" => "Kustomization",
+    "namespace" => "flux-system",
+    "name" => "eso-config",
+    "path" => "./clusters/home/packages/eso-config",
+    "inventory" => [{
+      "apiVersion" => "external-secrets.io/v1beta1",
+      "kind" => "ClusterSecretStore",
+      "namespace" => "",
+      "name" => "secret-store-provider"
+    }]
+  }],
+  "activeHelmReleases" => ESO_CONTROLLER_ACTIVATION_CONTRACT["activeHelmReleases"]
+}.freeze
+
+ESO_CONFIG_STORE_IDENTITY = "external-secrets.io/v1beta1/ClusterSecretStore//secret-store-provider"
+ESO_CONFIG_STORE_POLICY = {
+  "apiVersion" => "external-secrets.io/v1beta1",
+  "kind" => "ClusterSecretStore",
+  "namespace" => "",
+  "name" => "secret-store-provider"
+}.freeze
+ESO_CONFIG_STORE_SPEC = {
+  "provider" => {
+    "gcpsm" => {
+      "auth" => {
+        "secretRef" => {
+          "secretAccessKeySecretRef" => {
+            "name" => "gcpsm-secret",
+            "key" => "secret-access-credentials",
+            "namespace" => "gcpsm-secret"
+          }
+        }
+      },
+      "projectID" => "269357193809"
+    }
+  }
+}.freeze
 TEST_FIXTURE_ACTIVATION_CONTRACT = {
   "activeKustomizations" => [{
     "apiVersion" => "kustomize.toolkit.fluxcd.io/v1",
@@ -154,6 +194,7 @@ TEST_FIXTURE_ACTIVATION_CONTRACT = {
 }.freeze
 ACTIVATION_PHASE_CONTRACTS = {
   "eso-controller" => ESO_CONTROLLER_ACTIVATION_CONTRACT,
+  "eso-config" => ESO_CONFIG_ACTIVATION_CONTRACT,
   # This reserved phase is usable only by the offline fake transport in test-validation.rb.
   # Its .invalid artifact URL makes it fail closed under the real CI transport.
   "test-fixture-helm-adoption" => TEST_FIXTURE_ACTIVATION_CONTRACT
@@ -363,14 +404,21 @@ def validate_activation_phase_contract!(activation, failures)
   phase = activation["phase"].to_s
   expected_kustomization = ESO_CONTROLLER_ACTIVATION_CONTRACT.fetch("activeKustomizations").first
   expected_helm_release = ESO_CONTROLLER_ACTIVATION_CONTRACT.fetch("activeHelmReleases").first
+  expected_config_kustomization = ESO_CONFIG_ACTIVATION_CONTRACT.fetch("activeKustomizations").find { |entry| entry["name"] == "eso-config" }
   known_identity_present = Array(activation["activeKustomizations"]).any? do |entry|
     entry.is_a?(Hash) && %w[apiVersion kind namespace name].all? { |field| entry[field] == expected_kustomization[field] }
   end
   known_identity_present ||= Array(activation["activeHelmReleases"]).any? do |entry|
     entry.is_a?(Hash) && %w[apiVersion kind namespace name].all? { |field| entry[field] == expected_helm_release[field] }
   end
-  if known_identity_present && phase != "eso-controller"
+  known_config_identity_present = Array(activation["activeKustomizations"]).any? do |entry|
+    entry.is_a?(Hash) && %w[apiVersion kind namespace name].all? { |field| entry[field] == expected_config_kustomization[field] }
+  end
+  if known_identity_present && !["eso-controller", "eso-config"].include?(phase)
     failures << "Flux ESO controller identities must use fluxActivation phase eso-controller"
+  end
+  if known_config_identity_present && phase != "eso-config"
+    failures << "Flux ESO config identities must use fluxActivation phase eso-config"
   end
 
   expected_contract = ACTIVATION_PHASE_CONTRACTS[phase]
@@ -383,6 +431,20 @@ def validate_activation_phase_contract!(activation, failures)
     unless activation[key] == expected
       failures << "fluxActivation #{phase} #{key} contract must exactly match the reviewed phase boundary"
     end
+  end
+end
+
+def validate_active_cluster_secret_store!(document, identity, contract, failures)
+  unless document["spec"] == contract["spec"]
+    failures << "active ClusterSecretStore #{identity}: spec must exactly match the reviewed ESO config"
+  end
+end
+
+def validate_eso_config_kustomization!(document, failures)
+  spec = document.fetch("spec", {})
+  failures << "active Kustomization eso-config: wait must be true" unless spec["wait"] == true
+  unless spec["dependsOn"] == [{"name" => "eso-controller"}]
+    failures << "active Kustomization eso-config: dependsOn must exactly be [{name: eso-controller}]"
   end
 end
 
@@ -718,6 +780,7 @@ approved_active_kustomizations = Set.new
 approved_active_helm_releases = Set.new
 active_kustomization_policies = {}
 active_helm_release_policies = {}
+active_cluster_secret_store_policies = {}
 active_helm_release_contracts = {}
 if activation
   raise "#{FLUX_ACTIVATION_POLICY_KEY} must be a mapping" unless activation.is_a?(Hash)
@@ -739,6 +802,7 @@ if activation
     "HelmRelease",
     failures
   )
+  active_cluster_secret_store_policies = {ESO_CONFIG_STORE_IDENTITY => ESO_CONFIG_STORE_POLICY.merge("spec" => ESO_CONFIG_STORE_SPEC)} if activation["phase"] == "eso-config"
   approved_active_kustomizations = active_kustomization_policies.keys.to_set
   approved_active_helm_releases = active_helm_release_policies.keys.to_set
   raise "#{FLUX_ACTIVATION_POLICY_KEY} must approve at least one active Kustomization" if approved_active_kustomizations.empty?
@@ -853,6 +917,9 @@ flux_entries.each do |source_path, resource|
     failures << "approved active Flux Kustomization #{name}: suspend must be false" unless spec["suspend"] == false
     expected_path = active_kustomization_policies.fetch(flux_id)["path"]
     failures << "active Kustomization path must be #{expected_path}: #{flux_id}" unless spec["path"] == expected_path
+    if activation && activation["phase"] == "eso-config" && name == "eso-config" && namespace == "flux-system"
+      validate_eso_config_kustomization!(resource, failures)
+    end
   else
     failures << "Flux Kustomization #{name}: prune must be false" unless spec["prune"] == false
     failures << "Flux Kustomization #{name}: suspend must be true" unless spec["suspend"] == true
@@ -1078,6 +1145,21 @@ end
 missing_active_helm_releases = approved_active_helm_releases - seen_objects.keys.to_set
 missing_active_helm_releases.each do |identity|
   failures << "approved active HelmRelease is missing: #{identity}"
+end
+missing_active_cluster_secret_stores = active_cluster_secret_store_policies.keys.to_set - seen_objects.keys.to_set
+missing_active_cluster_secret_stores.each do |identity|
+  failures << "approved active ClusterSecretStore is missing: #{identity}"
+end
+active_cluster_secret_store_policies.each do |identity, policy_entry|
+  next unless seen_objects.key?(identity)
+
+  owner = seen_objects.fetch(identity).first
+  expected_owner = namespaced_identity("Kustomization", "flux-system", "eso-config")
+  failures << "active ClusterSecretStore #{identity}: owner must be #{expected_owner}" unless owner == expected_owner
+  unless actual_active_kustomization_owners.include?(owner)
+    failures << "active ClusterSecretStore #{identity} is rendered by a suspended Flux Kustomization #{owner}"
+  end
+  validate_active_cluster_secret_store!(rendered_documents.fetch(identity), identity, policy_entry, failures)
 end
 approved_active_helm_releases.each do |identity|
   next unless seen_objects.key?(identity)
