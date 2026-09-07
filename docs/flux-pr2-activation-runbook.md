@@ -19,7 +19,7 @@ identityは`.github/manifest-policy.yaml`の`fluxActivation`へ全件列挙し�
 validatorで拒否する。順序は以下のみ。
 
 1. ESO controller: outer Kustomization + HelmReleaseをfalse。timeout 5m。Deployment/CRDがReadyでなければ即停止しcommit revert。revert後のouter停止確認と、存在するinner HelmReleaseの明示承認済み直接suspendを含む個別の証跡・手順は`docs/flux-eso-controller-activation-runbook.md`。
-2. ESO config: ClusterSecretStore/ExternalSecretをfalse。Secret値ではなくstatus/metadataでReady/SecretSyncedを確認。timeout/provider failureで停止・revert。
+2. ESO config: `eso-config` Kustomizationだけをfalseにし、既存ClusterSecretStore 1件を管理する。ExternalSecret自体にsuspendを設定しない。Secret値ではなくstatusでstore Readyと既存ExternalSecretのSecretSyncedを確認。timeout/provider failureで停止・revert。詳細は`docs/flux-eso-config-activation-runbook.md`。
 3. CSI: DaemonSet rolloutとownershipをread-only確認。failureで停止・revert。
 4. Nextcloud: 常に除外。`activation-blocked` annotationはFlux nativeの強制機構ではなく、外側だけを手動resumeするとExternalSecretが先に適用され得る。Ingress/PVC/NFS/Service/cron/probes/TLS、render child、existing Helm release adoption/parity、外部Secret参照の安全な証明に加え、Secret適用を独立phase/packageへ分けるかadmission policyを用意した別PRまでblocked。
 
