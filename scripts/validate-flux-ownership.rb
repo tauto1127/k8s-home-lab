@@ -15,7 +15,14 @@ failures = []
 
 BOOTSTRAP_SOURCE_POLICY_KEY = "bootstrapManagedSources"
 FLUX_BOOTSTRAP_POLICY_KEY = "fluxBootstrap"
+FLUX_ACTIVATION_POLICY_KEY = "fluxActivation"
 ACTIVATION_BLOCKED = "flux.takutk.com/activation-blocked"
+BLOCKED_ACTIVATION_PATHS = Set.new(["./clusters/home/packages/nextcloud"]).freeze
+BLOCKED_ACTIVATION_OBJECTS = Set.new([
+  "v1/Namespace//nextcloud",
+  "helm.toolkit.fluxcd.io/v2/HelmRelease/nextcloud/nextcloud",
+  "external-secrets.io/v1beta1/ExternalSecret/nextcloud/nextcloud-db-secret"
+]).freeze
 KUBECTL = ENV.fetch("FLUX_OWNERSHIP_KUBECTL", "kubectl")
 CURL = ENV.fetch("FLUX_OWNERSHIP_CURL", "curl")
 FLUX = ENV.fetch("FLUX_OWNERSHIP_FLUX", "flux")
@@ -35,6 +42,121 @@ EXPECTED_BOOTSTRAP_ROOT = {
   "name" => "flux-system",
   "path" => "./clusters/home",
   "prune" => false
+}.freeze
+ESO_CONTROLLER_ACTIVATION_CONTRACT = {
+  "activeKustomizations" => [{
+    "apiVersion" => "kustomize.toolkit.fluxcd.io/v1",
+    "kind" => "Kustomization",
+    "namespace" => "flux-system",
+    "name" => "eso-controller",
+    "path" => "./clusters/home/packages/eso-controller",
+    "inventory" => [
+      {
+        "apiVersion" => "v1",
+        "kind" => "Namespace",
+        "namespace" => "",
+        "name" => "external-secrets"
+      },
+      {
+        "apiVersion" => "source.toolkit.fluxcd.io/v1",
+        "kind" => "HelmRepository",
+        "namespace" => "flux-system",
+        "name" => "external-secrets"
+      },
+      {
+        "apiVersion" => "helm.toolkit.fluxcd.io/v2",
+        "kind" => "HelmRelease",
+        "namespace" => "external-secrets",
+        "name" => "external-secrets"
+      }
+    ]
+  }],
+  "activeHelmReleases" => [{
+    "apiVersion" => "helm.toolkit.fluxcd.io/v2",
+    "kind" => "HelmRelease",
+    "namespace" => "external-secrets",
+    "name" => "external-secrets",
+    "owner" => {
+      "apiVersion" => "kustomize.toolkit.fluxcd.io/v1",
+      "kind" => "Kustomization",
+      "namespace" => "flux-system",
+      "name" => "eso-controller"
+    },
+    "chart" => {
+      "name" => "external-secrets",
+      "version" => "0.14.4",
+      "repository" => {
+        "apiVersion" => "source.toolkit.fluxcd.io/v1",
+        "kind" => "HelmRepository",
+        "namespace" => "flux-system",
+        "name" => "external-secrets",
+        "url" => "https://charts.external-secrets.io"
+      },
+      "artifact" => {
+        "url" => "https://github.com/external-secrets/external-secrets/releases/download/helm-chart-0.14.4/external-secrets-0.14.4.tgz",
+        "sha256" => "cfda856bdfab922a92c1e0ca199811edae21ad529484f3669b8233e813168779",
+        "crdTemplates" => {
+          "pathPrefix" => "external-secrets/templates/crds/",
+          "count" => 19,
+          "sha256" => "5fa17b33c731ab29d089f2bfd350342b002c6758db9ad7f7667c71c809f23ab5"
+        }
+      }
+    },
+    "safety" => {"installCRDs" => true}
+  }]
+}.freeze
+TEST_FIXTURE_ACTIVATION_CONTRACT = {
+  "activeKustomizations" => [{
+    "apiVersion" => "kustomize.toolkit.fluxcd.io/v1",
+    "kind" => "Kustomization",
+    "namespace" => "flux-system",
+    "name" => "fixture-controller",
+    "path" => "./clusters/pkg",
+    "inventory" => [
+      {"apiVersion" => "v1", "kind" => "Namespace", "namespace" => "", "name" => "fixture-system"},
+      {"apiVersion" => "source.toolkit.fluxcd.io/v1", "kind" => "HelmRepository", "namespace" => "flux-system", "name" => "fixture-repository"},
+      {"apiVersion" => "helm.toolkit.fluxcd.io/v2", "kind" => "HelmRelease", "namespace" => "fixture-system", "name" => "fixture-release"}
+    ]
+  }],
+  "activeHelmReleases" => [{
+    "apiVersion" => "helm.toolkit.fluxcd.io/v2",
+    "kind" => "HelmRelease",
+    "namespace" => "fixture-system",
+    "name" => "fixture-release",
+    "owner" => {
+      "apiVersion" => "kustomize.toolkit.fluxcd.io/v1",
+      "kind" => "Kustomization",
+      "namespace" => "flux-system",
+      "name" => "fixture-controller"
+    },
+    "chart" => {
+      "name" => "external-secrets",
+      "version" => "0.14.4",
+      "repository" => {
+        "apiVersion" => "source.toolkit.fluxcd.io/v1",
+        "kind" => "HelmRepository",
+        "namespace" => "flux-system",
+        "name" => "fixture-repository",
+        "url" => "https://charts.external-secrets.io"
+      },
+      "artifact" => {
+        "url" => "https://fixture.invalid/external-secrets-0.14.4.tgz",
+        "sha256" => "a17555a4b06afbf37d0739bba7198d6c3cd871aa1143fe26a1d16e26c53eecf4",
+        "crdTemplates" => {
+          "pathPrefix" => "external-secrets/templates/crds/",
+          "count" => 1,
+          "sha256" => "336717a1613029971faf17d3accd4ac7eb549dcd2de227da8211794d9c7ac654"
+        }
+      }
+    },
+    "safety" => {"installCRDs" => true}
+  }]
+}.freeze
+ACTIVATION_PHASE_CONTRACTS = {
+  "eso-controller" => ESO_CONTROLLER_ACTIVATION_CONTRACT,
+  # This reserved phase is usable only by the offline fake transport in test-validation.rb.
+  # Its .invalid artifact URL makes it fail closed under the real CI transport.
+  "test-fixture-helm-adoption" => TEST_FIXTURE_ACTIVATION_CONTRACT
 }.freeze
 
 # Parse the YAML stream without permitting Ruby objects or aliases.
@@ -107,7 +229,7 @@ rescue Errno::ENOENT
   raise "gotk-components: pinned Flux generator is unavailable (#{FLUX})"
 end
 
-def schema_archive_files(bytes, description)
+def safe_archive_files(bytes, description)
   files = {}
   gzip = Zlib::GzipReader.new(StringIO.new(bytes))
   archive = Gem::Package::TarReader.new(gzip)
@@ -128,6 +250,17 @@ rescue Zlib::GzipFile::Error, Gem::Package::TarInvalidError, EOFError
 ensure
   archive&.close
   gzip&.close
+end
+
+def archive_file_set_sha256(files, paths)
+  digest = Digest::SHA256.new
+  paths.sort.each do |path|
+    digest.update(path)
+    digest.update("\0")
+    digest.update(files.fetch(path))
+    digest.update("\0")
+  end
+  digest.hexdigest
 end
 
 def resource_documents(document)
@@ -198,6 +331,187 @@ def policy_identity(entry, description)
     raise "#{description}.#{field} is required" if entry[field].to_s.empty?
   end
   [entry["apiVersion"], entry["kind"], entry["namespace"].to_s, entry["name"]].join("/")
+end
+
+def activation_policy_map(activation, key, expected_api_version, expected_kind, failures)
+  entries = activation[key]
+  raise "#{FLUX_ACTIVATION_POLICY_KEY}.#{key} must be an array" unless entries.is_a?(Array)
+
+  entries.each_with_object({}) do |entry, policies|
+    identity = policy_identity(entry, "#{FLUX_ACTIVATION_POLICY_KEY}.#{key} entry")
+    unless entry["apiVersion"] == expected_api_version && entry["kind"] == expected_kind
+      failures << "#{FLUX_ACTIVATION_POLICY_KEY}.#{key} entry must identify #{expected_api_version}/#{expected_kind}: #{identity}"
+    end
+    if policies.key?(identity)
+      failures << "duplicate #{FLUX_ACTIVATION_POLICY_KEY}.#{key} entry: #{identity}"
+    else
+      policies[identity] = entry
+    end
+  end
+end
+
+def inventory_policy_identity(entry, description)
+  raise "#{description} must be a mapping" unless entry.is_a?(Hash)
+  %w[apiVersion kind name].each do |field|
+    raise "#{description}.#{field} is required" if entry[field].to_s.empty?
+  end
+  raise "#{description}.namespace is required" unless entry.key?("namespace")
+  [entry["apiVersion"], entry["kind"], entry["namespace"].to_s, entry["name"]].join("/")
+end
+
+def validate_activation_phase_contract!(activation, failures)
+  phase = activation["phase"].to_s
+  expected_kustomization = ESO_CONTROLLER_ACTIVATION_CONTRACT.fetch("activeKustomizations").first
+  expected_helm_release = ESO_CONTROLLER_ACTIVATION_CONTRACT.fetch("activeHelmReleases").first
+  known_identity_present = Array(activation["activeKustomizations"]).any? do |entry|
+    entry.is_a?(Hash) && %w[apiVersion kind namespace name].all? { |field| entry[field] == expected_kustomization[field] }
+  end
+  known_identity_present ||= Array(activation["activeHelmReleases"]).any? do |entry|
+    entry.is_a?(Hash) && %w[apiVersion kind namespace name].all? { |field| entry[field] == expected_helm_release[field] }
+  end
+  if known_identity_present && phase != "eso-controller"
+    failures << "Flux ESO controller identities must use fluxActivation phase eso-controller"
+  end
+
+  expected_contract = ACTIVATION_PHASE_CONTRACTS[phase]
+  unless expected_contract
+    failures << "fluxActivation phase is not recognized: #{phase}"
+    return
+  end
+
+  expected_contract.each do |key, expected|
+    unless activation[key] == expected
+      failures << "fluxActivation #{phase} #{key} contract must exactly match the reviewed phase boundary"
+    end
+  end
+end
+
+def validate_activation_chart_policy!(policy, identity, failures, artifact_cache)
+  chart = policy["chart"]
+  raise "active HelmRelease #{identity}: chart policy must be a mapping" unless chart.is_a?(Hash)
+
+  chart_name = chart["name"].to_s
+  chart_version = chart["version"].to_s
+  raise "active HelmRelease #{identity}: chart.name is required" if chart_name.empty?
+  unless chart_version.match?(/\A\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\z/)
+    failures << "active HelmRelease #{identity}: chart.version must be an exact semantic version"
+  end
+
+  repository = chart["repository"]
+  raise "active HelmRelease #{identity}: chart.repository must be a mapping" unless repository.is_a?(Hash)
+  repository_identity = policy_identity(repository, "active HelmRelease #{identity} chart.repository")
+  unless repository["apiVersion"] == "source.toolkit.fluxcd.io/v1" && repository["kind"] == "HelmRepository"
+    failures << "active HelmRelease #{identity}: chart.repository must identify source.toolkit.fluxcd.io/v1/HelmRepository"
+  end
+  repository_url = repository["url"].to_s
+  failures << "active HelmRelease #{identity}: chart.repository.url must use HTTPS" unless repository_url.match?(%r{\Ahttps://[^[:space:]]+\z})
+
+  artifact = chart["artifact"]
+  artifact_contract = nil
+  if artifact
+    raise "active HelmRelease #{identity}: chart.artifact must be a mapping" unless artifact.is_a?(Hash)
+    artifact_url = artifact["url"].to_s
+    artifact_sha = artifact["sha256"].to_s
+    artifact_url_valid = artifact_url.match?(%r{\Ahttps://[^[:space:]]+\z})
+    failures << "active HelmRelease #{identity}: chart.artifact.url must use HTTPS" unless artifact_url_valid
+    unless artifact_sha.match?(/\A[0-9a-f]{64}\z/)
+      failures << "active HelmRelease #{identity}: chart.artifact.sha256 must be an exact lowercase SHA256"
+    end
+
+    crd_templates = artifact["crdTemplates"]
+    if crd_templates
+      raise "active HelmRelease #{identity}: chart.artifact.crdTemplates must be a mapping" unless crd_templates.is_a?(Hash)
+      prefix = crd_templates["pathPrefix"].to_s
+      prefix_path = Pathname.new(prefix)
+      prefix_valid = prefix.end_with?("/") && !prefix_path.absolute? && !prefix_path.each_filename.include?("..")
+      failures << "active HelmRelease #{identity}: CRD template pathPrefix must be a safe archive prefix" unless prefix_valid
+      expected_count = crd_templates["count"]
+      unless expected_count.is_a?(Integer) && expected_count.positive?
+        failures << "active HelmRelease #{identity}: CRD template count must be a positive integer"
+      end
+      expected_crd_sha = crd_templates["sha256"].to_s
+      unless expected_crd_sha.match?(/\A[0-9a-f]{64}\z/)
+        failures << "active HelmRelease #{identity}: CRD template sha256 must be an exact lowercase SHA256"
+      end
+    end
+
+    if artifact_url_valid && artifact_sha.match?(/\A[0-9a-f]{64}\z/)
+      bytes = artifact_cache.fetch([artifact_url, artifact_sha]) do
+        artifact_cache[[artifact_url, artifact_sha]] = verify_remote_sha256!(
+          artifact_url,
+          artifact_sha,
+          "active HelmRelease #{identity} chart artifact",
+          failures
+        )
+      end
+      if bytes && crd_templates
+        files = safe_archive_files(bytes, "active HelmRelease #{identity} chart artifact")
+        prefix = crd_templates["pathPrefix"].to_s
+        paths = files.keys.select { |path| path.start_with?(prefix) }
+        expected_count = crd_templates["count"]
+        unless paths.length == expected_count
+          failures << "active HelmRelease #{identity}: CRD template inventory count mismatch: expected #{expected_count}; found #{paths.length}"
+        end
+        actual_crd_sha = archive_file_set_sha256(files, paths)
+        unless actual_crd_sha == crd_templates["sha256"]
+          failures << "active HelmRelease #{identity}: CRD template inventory checksum mismatch"
+        end
+      end
+    end
+    artifact_contract = artifact
+  end
+
+  safety = policy.fetch("safety", {})
+  raise "active HelmRelease #{identity}: safety policy must be a mapping" unless safety.is_a?(Hash)
+  if safety.key?("installCRDs") && ![true, false].include?(safety["installCRDs"])
+    failures << "active HelmRelease #{identity}: safety.installCRDs must be a boolean"
+  end
+
+  owner_policy = policy.fetch("owner")
+  policy_identity(owner_policy, "active HelmRelease #{identity} owner")
+  {
+    "chartName" => chart_name,
+    "chartVersion" => chart_version,
+    "repositoryIdentity" => repository_identity,
+    "repositoryUrl" => repository_url,
+    "ownerIdentity" => namespaced_identity("Kustomization", owner_policy["namespace"], owner_policy["name"]),
+    "artifact" => artifact_contract,
+    "installCRDs" => safety["installCRDs"]
+  }
+end
+
+def validate_active_helm_release_safety(document, identity, contract, failures)
+  spec = document["spec"]
+  unless spec.is_a?(Hash)
+    failures << "active HelmRelease #{identity}: spec must be a mapping"
+    return
+  end
+  namespace = document.dig("metadata", "namespace").to_s
+  name = document.dig("metadata", "name").to_s
+  {
+    "releaseName" => name,
+    "targetNamespace" => namespace,
+    "storageNamespace" => namespace
+  }.each do |field, expected|
+    failures << "active HelmRelease #{identity}: spec.#{field} must be #{expected}" unless spec[field] == expected
+  end
+  %w[install upgrade].each do |action|
+    action_spec = spec[action]
+    unless action_spec.is_a?(Hash)
+      failures << "active HelmRelease #{identity}: spec.#{action} is required"
+      next
+    end
+    failures << "active HelmRelease #{identity}: #{action}.crds must be Skip" unless action_spec["crds"] == "Skip"
+    unless action_spec["disableTakeOwnership"] == true
+      failures << "active HelmRelease #{identity}: #{action}.disableTakeOwnership must be true"
+    end
+  end
+  unless contract["installCRDs"].nil?
+    expected = contract["installCRDs"]
+    unless spec.dig("values", "installCRDs") == expected
+      failures << "active HelmRelease #{identity}: spec.values.installCRDs must be #{expected.inspect}"
+    end
+  end
 end
 
 def component_inventory(documents)
@@ -338,7 +652,7 @@ def validate_flux_schemas!(root, bootstrap, failures)
 
   entries = Array(schemas["files"])
   raise "fluxBootstrap.schemas.files must not be empty" if entries.empty?
-  upstream_files = archive_bytes ? schema_archive_files(archive_bytes, "Flux crd-schemas.tar.gz") : {}
+  upstream_files = archive_bytes ? safe_archive_files(archive_bytes, "Flux crd-schemas.tar.gz") : {}
   expected_files = Set.new
   entries.each do |entry|
     raise "fluxBootstrap.schemas.files entries must be mappings" unless entry.is_a?(Hash)
@@ -399,6 +713,84 @@ if bootstrap
   root_policy = bootstrap.fetch("root")
   bootstrap_root_owner = namespaced_identity("Kustomization", root_policy["namespace"], root_policy["name"])
 end
+activation = policy[FLUX_ACTIVATION_POLICY_KEY]
+approved_active_kustomizations = Set.new
+approved_active_helm_releases = Set.new
+active_kustomization_policies = {}
+active_helm_release_policies = {}
+active_helm_release_contracts = {}
+if activation
+  raise "#{FLUX_ACTIVATION_POLICY_KEY} must be a mapping" unless activation.is_a?(Hash)
+  %w[phase reason].each do |field|
+    raise "#{FLUX_ACTIVATION_POLICY_KEY}.#{field} is required" if activation[field].to_s.strip.empty?
+  end
+  validate_activation_phase_contract!(activation, failures)
+  active_kustomization_policies = activation_policy_map(
+    activation,
+    "activeKustomizations",
+    "kustomize.toolkit.fluxcd.io/v1",
+    "Kustomization",
+    failures
+  )
+  active_helm_release_policies = activation_policy_map(
+    activation,
+    "activeHelmReleases",
+    "helm.toolkit.fluxcd.io/v2",
+    "HelmRelease",
+    failures
+  )
+  approved_active_kustomizations = active_kustomization_policies.keys.to_set
+  approved_active_helm_releases = active_helm_release_policies.keys.to_set
+  raise "#{FLUX_ACTIVATION_POLICY_KEY} must approve at least one active Kustomization" if approved_active_kustomizations.empty?
+  blocked_policy_failures = []
+  if active_kustomization_policies.values.any? { |entry| entry["name"] == "nextcloud" }
+    blocked_policy_failures << "Nextcloud Flux Kustomization must remain suspended"
+  end
+  if active_helm_release_policies.values.any? { |entry| entry["name"] == "nextcloud" }
+    blocked_policy_failures << "Nextcloud HelmRelease must remain suspended"
+  end
+  raise blocked_policy_failures.join("\n") if blocked_policy_failures.any?
+  if bootstrap_root_id && approved_active_kustomizations.include?(bootstrap_root_id)
+    failures << "bootstrap root must not be listed in #{FLUX_ACTIVATION_POLICY_KEY}.activeKustomizations"
+  end
+  artifact_cache = {}
+  active_kustomization_policies.each do |identity, entry|
+    path = entry["path"].to_s
+    raise "active Kustomization #{identity}: path is required" if path.empty?
+    failures << "active Kustomization #{identity}: path must be repository-relative and begin with ./" unless path.start_with?("./")
+    if BLOCKED_ACTIVATION_PATHS.include?(path)
+      failures << "active Kustomization #{identity}: Nextcloud package path must remain blocked"
+    end
+    inventory = entry["inventory"]
+    raise "active Kustomization #{identity}: inventory must be a non-empty array" unless inventory.is_a?(Array) && !inventory.empty?
+    inventory_ids = Set.new
+    inventory.each do |resource|
+      resource_id = inventory_policy_identity(resource, "active Kustomization #{identity} inventory entry")
+      failures << "active Kustomization #{identity}: duplicate inventory entry #{resource_id}" unless inventory_ids.add?(resource_id)
+    end
+    if (inventory_ids & BLOCKED_ACTIVATION_OBJECTS).any?
+      failures << "active Kustomization #{identity}: Nextcloud inventory must remain blocked"
+    end
+    entry["__inventory_ids"] = inventory_ids
+  end
+  active_helm_release_policies.each do |identity, entry|
+    contract = validate_activation_chart_policy!(entry, identity, failures, artifact_cache)
+    active_helm_release_contracts[identity] = contract
+    owner = entry.fetch("owner")
+    unless approved_active_kustomizations.any? do |kustomization_id|
+      expected_owner = active_kustomization_policies.fetch(kustomization_id)
+      %w[apiVersion kind namespace name].all? { |field| owner[field] == expected_owner[field] }
+    end
+      failures << "active HelmRelease #{identity}: owner must be an approved active Kustomization"
+    end
+  end
+  inventory_helm_releases = active_kustomization_policies.values.flat_map do |entry|
+    entry.fetch("__inventory_ids").select { |identity| identity.start_with?("helm.toolkit.fluxcd.io/v2/HelmRelease/") }
+  end.to_set
+  unless inventory_helm_releases == approved_active_helm_releases
+    failures << "#{FLUX_ACTIVATION_POLICY_KEY}: active HelmRelease policy must exactly match active Kustomization inventory"
+  end
+end
 allowed_bootstrap_sources = Set.new(Array(policy[BOOTSTRAP_SOURCE_POLICY_KEY]).map do |entry|
   [entry.fetch("apiVersion"), entry.fetch("kind"), entry.fetch("namespace").to_s, entry.fetch("name")].join("/")
 end)
@@ -435,6 +827,7 @@ seen_flux_identities = {}
 declared_flux_resources = {}
 flux_by_identity = {}
 package_objects = {}
+actual_active_kustomization_owners = Set.new
 
 # First pass: collect every Flux identity and render every target package. No dependency
 # or source validation is performed here, so declaration order cannot affect the result.
@@ -455,12 +848,25 @@ flux_entries.each do |source_path, resource|
     root_policy = bootstrap.fetch("root")
     failures << "bootstrap root prune must be #{root_policy['prune'].inspect}" unless spec["prune"] == root_policy["prune"]
     failures << "bootstrap root must not be suspended" if spec["suspend"] == true
+  elsif approved_active_kustomizations.include?(flux_id)
+    failures << "approved active Flux Kustomization #{name}: prune must be false" unless spec["prune"] == false
+    failures << "approved active Flux Kustomization #{name}: suspend must be false" unless spec["suspend"] == false
+    expected_path = active_kustomization_policies.fetch(flux_id)["path"]
+    failures << "active Kustomization path must be #{expected_path}: #{flux_id}" unless spec["path"] == expected_path
   else
     failures << "Flux Kustomization #{name}: prune must be false" unless spec["prune"] == false
     failures << "Flux Kustomization #{name}: suspend must be true" unless spec["suspend"] == true
   end
+  owner = namespaced_identity("Kustomization", namespace, name)
+  actual_active_kustomization_owners << owner if !is_bootstrap_root && spec["suspend"] == false
+  if name == "nextcloud" && spec["suspend"] != true
+    failures << "Nextcloud Flux Kustomization must remain suspended"
+  end
   path_value = spec["path"]
   raise "Flux Kustomization #{name}: spec.path is required" unless path_value.is_a?(String) && !path_value.empty?
+  if !is_bootstrap_root && BLOCKED_ACTIVATION_PATHS.include?(path_value) && spec["suspend"] != true
+    failures << "Nextcloud package path must remain suspended: #{path_value}"
+  end
   if is_bootstrap_root && path_value != bootstrap.dig("root", "path")
     raise "bootstrap root path must be #{bootstrap.dig('root', 'path')}"
   end
@@ -469,6 +875,10 @@ flux_entries.each do |source_path, resource|
   package_objects[namespaced_identity("Kustomization", namespace, name)] = render_package(root, package_dir, name)
 end
 failures << "bootstrap root Kustomization is missing: #{bootstrap_root_id}" if bootstrap_root_id && !seen_flux_identities.key?(bootstrap_root_id)
+missing_active_kustomizations = approved_active_kustomizations - seen_flux_identities.keys.to_set
+missing_active_kustomizations.each do |identity|
+  failures << "approved active Flux Kustomization is missing: #{identity}"
+end
 
 # Every rendered Flux Kustomization must have an identical declaration under clusters/.
 # This rejects Flux CRs smuggled through external package resources while still allowing
@@ -585,6 +995,7 @@ end
 flux_by_identity.each_key { |node| walk.call(node) }
 
 seen_objects = {}
+rendered_documents = {}
 package_objects.each do |owner, entries|
   entries.each do |path, doc|
     next unless doc.is_a?(Hash)
@@ -594,13 +1005,56 @@ package_objects.each do |owner, entries|
       raise "duplicate Flux-owned object #{id}: owner #{previous_owner} source #{previous_path}; owner #{owner} source #{path}"
     end
     seen_objects[id] = [owner, path]
+    rendered_documents[id] = doc
+  end
+end
+active_kustomization_policies.each do |identity, entry|
+  policy_owner = namespaced_identity("Kustomization", entry["namespace"], entry["name"])
+  actual_inventory = Array(package_objects[policy_owner]).each_with_object(Set.new) do |(path, document), identities|
+    identities << required_identity(document, path.to_s) if document.is_a?(Hash)
+  end
+  expected_inventory = entry.fetch("__inventory_ids")
+  unless actual_inventory == expected_inventory
+    failures << "active Kustomization #{identity}: rendered inventory mismatch: " \
+                "expected #{expected_inventory.to_a.sort.join(', ')}; " \
+                "found #{actual_inventory.to_a.sort.join(', ')}"
+  end
+end
+actual_active_kustomization_owners.each do |owner|
+  Array(package_objects[owner]).each do |path, document|
+    next unless document.is_a?(Hash)
+
+    object_id = required_identity(document, path.to_s)
+    if BLOCKED_ACTIVATION_OBJECTS.include?(object_id) || document.dig("metadata", "annotations", ACTIVATION_BLOCKED) == "true"
+      failures << "active Flux Kustomization #{owner} renders a blocked Nextcloud object: #{object_id}"
+    end
   end
 end
 package_objects.each do |_owner, entries|
   entries.each do |path, doc|
     next unless doc.is_a?(Hash) && doc["kind"] == "HelmRelease"
     id = required_identity(doc, path.to_s)
-    failures << "HelmRelease #{id}: suspend must be true" unless doc.dig("spec", "suspend") == true
+    unless doc["spec"].is_a?(Hash)
+      failures << "HelmRelease #{id}: spec must be a mapping"
+      next
+    end
+    if approved_active_helm_releases.include?(id)
+      failures << "approved active HelmRelease #{id}: suspend must be false" unless doc.dig("spec", "suspend") == false
+      contract = active_helm_release_contracts.fetch(id)
+      validate_active_helm_release_safety(doc, id, contract, failures)
+      chart_spec = doc.dig("spec", "chart", "spec")
+      unless chart_spec.is_a?(Hash) && chart_spec["chart"] == contract["chartName"]
+        failures << "active HelmRelease #{id}: chart name must be #{contract['chartName']}"
+      end
+      unless chart_spec.is_a?(Hash) && chart_spec["version"] == contract["chartVersion"]
+        failures << "active HelmRelease #{id}: chart version must be #{contract['chartVersion']}"
+      end
+    else
+      failures << "HelmRelease #{id}: suspend must be true" unless doc.dig("spec", "suspend") == true
+    end
+    if doc.dig("metadata", "name") == "nextcloud" && doc.dig("spec", "suspend") != true
+      failures << "Nextcloud HelmRelease must remain suspended"
+    end
     chart_ref = doc.dig("spec", "chart", "spec", "sourceRef")
     if !chart_ref.is_a?(Hash) || chart_ref["kind"] != "HelmRepository" || chart_ref["name"].to_s.empty?
       failures << "HelmRelease #{id}: chart.spec.sourceRef HelmRepository is required"
@@ -608,6 +1062,41 @@ package_objects.each do |_owner, entries|
       ref_ns = chart_ref["namespace"] || doc.dig("metadata", "namespace").to_s
       repo_id = ["source.toolkit.fluxcd.io/v1", "HelmRepository", ref_ns.to_s, chart_ref["name"]].join("/")
       failures << "HelmRelease #{id}: HelmRepository sourceRef is missing or mismatched: #{repo_id}" unless seen_objects.key?(repo_id)
+      if approved_active_helm_releases.include?(id)
+        contract = active_helm_release_contracts.fetch(id)
+        unless repo_id == contract["repositoryIdentity"]
+          failures << "active HelmRelease #{id}: HelmRepository identity must be #{contract['repositoryIdentity']}"
+        end
+        repository = rendered_documents[repo_id]
+        unless repository && repository.dig("spec", "url") == contract["repositoryUrl"]
+          failures << "active HelmRelease #{id}: HelmRepository URL must be #{contract['repositoryUrl']}"
+        end
+      end
+    end
+  end
+end
+missing_active_helm_releases = approved_active_helm_releases - seen_objects.keys.to_set
+missing_active_helm_releases.each do |identity|
+  failures << "approved active HelmRelease is missing: #{identity}"
+end
+approved_active_helm_releases.each do |identity|
+  next unless seen_objects.key?(identity)
+
+  owner = seen_objects.fetch(identity).first
+  expected_owner = active_helm_release_contracts.fetch(identity)["ownerIdentity"]
+  failures << "active HelmRelease #{identity}: owner must be #{expected_owner}" unless owner == expected_owner
+  unless actual_active_kustomization_owners.include?(owner)
+    failures << "active HelmRelease #{identity} is rendered by a suspended Flux Kustomization #{owner}"
+  end
+end
+actual_active_kustomization_owners.each do |owner|
+  Array(package_objects[owner]).each do |path, doc|
+    next unless doc.is_a?(Hash) && doc["kind"] == "HelmRelease"
+
+    identity = required_identity(doc, path.to_s)
+    release_active = doc["spec"].is_a?(Hash) && doc["spec"]["suspend"] == false
+    unless approved_active_helm_releases.include?(identity) && release_active
+      failures << "active Flux Kustomization #{owner} must activate HelmRelease #{identity} in the same policy"
     end
   end
 end

@@ -9,7 +9,7 @@ spec:
   timeout: 5m
   path: ./clusters/home/packages/eso-controller
   prune: false
-  suspend: true
+  suspend: false
   wait: true
   sourceRef:
     kind: GitRepository

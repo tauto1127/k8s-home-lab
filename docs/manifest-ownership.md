@@ -4,8 +4,10 @@
 
 この一覧は、どの定義をFluxの入力にできるかを示す。ここに記載したことは、
 Fluxが現在そのリソースを所有していることを意味しない。PR #43は停止状態の
-移行準備、後続bootstrap準備PRはinstall/source/rootのGit入力を追加するが、
-どちらもクラスターには何も適用しない。
+移行準備だった。bootstrapは別途適用済みで、2026-09-07の読み取り確認ではFluxの
+4 controllerとrootが稼働し、4 packageは停止中だった。activation PRのGit
+desiredではESO controllerだけが例外的に有効化され、outer Kustomizationとinner
+HelmReleaseがともに`suspend: false`になる。
 
 ## 分類
 
@@ -57,7 +59,8 @@ PVC、PV、namespace、CRD、privileged bindingは、初回移行時に
 | `pv/test-pvc.yaml` | excluded | test PVCは現在もBoundのため、cleanupは別途storageの判断が必要。 |
 | `clusters/home/flux-system/gotk-components.yaml` | bootstrap | Flux `v2.9.3`のCRD/controller/RBAC。生成物とupstream bytesのSHA256をpolicyで検証し、公式bundleの`cluster-admin`付与を含むcluster適用は別承認とする。 |
 | `clusters/home/flux-system/gotk-sync.yaml` | bootstrap | public GitRepositoryとactive root Kustomization。rootは`flux-system/`だけをcomposeし、`packages/`を直接所有しない。 |
-| `clusters/home/flux-system/sync.yaml` | migration-pending | 4つのpackage Kustomization定義。全て`suspend: true`、`prune: false`で、activationは別PRとする。 |
+| `clusters/home/flux-system/sync.yaml` | migration-pending | 4つのpackage Kustomization定義。activation PRのdesiredではESO controllerのouterだけ`suspend: false`、それ以外は`suspend: true`、全て`prune: false`。 |
+| `clusters/home/packages/eso-controller/helmrelease.yaml` | migration-pending | activation PRのdesiredではinner `external-secrets`を`suspend: false`としてFlux HelmReleaseへ移す。reconcile成功までは既存live Helm releaseのowner移行を未確認とする。 |
 
 すべてのraw `flux-candidate` packageには`kustomization.yaml`がある。Helm chartの
 templateは`helm template`後にのみ検証し、raw Kubernetes YAMLとしてはparseしない。
@@ -72,12 +75,12 @@ bindingは意図的にpackageから除外している。
 以下は2026-09-05に読み取り専用で確認した事項であり、PR1ではクラスターへ
 適用していない。
 
-- External Secrets Operatorのlive Helm release（chart `external-secrets-0.14.4`）は、このリポジトリ内にGit所有元がない。`middlewares/external-secrets-operator/helmfile.yaml`が管理しているのはESO本体ではなく、Secrets Store CSI Driverである。
+- ESOのGit定義はPR #43から`clusters/home/packages/eso-controller/helmrelease.yaml`に存在する。2026-09-07のactivation PRマージ前のliveではHelmReleaseは未作成で、既存Helm release（chart `external-secrets-0.14.4`）のFlux管理への移行は未実施だった。このPRは同じreleaseのFlux reconciliationを有効にする。旧`middlewares/external-secrets-operator/helmfile.yaml`が管理していたのはESO本体ではなくSecrets Store CSI Driverである。
 - Secrets Store CSI Driverは、Gitのdesired chart versionが`1.5.1`、liveが`1.4.8`である。差分を確認してから、どちらを正本にするか決める。
 - Nextcloudはlive Helm chart `9.1.3`で、Podが使用中の`33.0.5-apache` image digestに固定した。liveはExternalSecretが生成する`nextcloud-db-secret`を参照しているため、Helmfileも同じSecret名とキーを参照し、chartの既定資格情報Secretをrenderしない。ExternalSecret自体のGit ownerとHelm chartの全valuesが一致したことまでは確認していないため、HelmRelease化は引き続き`migration-pending`とする。
 - Nextcloud valuesは不完全で、既存releaseをupgradeするとchart defaultsへ戻る危険がある。Ingress/PVC/NFS/Service/cron/probes/TLS、既存release adoptionと完全parityが証明されるまで`activation-blocked`で停止し、runbook対象外とする。Secret値を取得せず証明できない場合はvaluesを補完しない。
 - `activation-blocked` annotationはCI markerでありFlux nativeの強制機構ではない。Nextcloudの外側Kustomizationだけを手動resumeするとExternalSecretが先に適用され得るため、CLI resume/手動unsuspendは禁止する。将来activationにはSecret適用phaseの分離またはadmission policyを必須とする。
-- activationはCLI resumeではなく、外側Kustomizationと内側HelmReleaseを同一Git commitでfalseにする別PRで行う。root reconciliationはGitのsuspend:trueに戻す。特に、親Kustomizationが子Kustomizationを取り込む構造を自動検出で二重登録しない。controllers、CRDs、PVC/PV、Secret生成物、依存するカスタムリソースは境界と`dependsOn`を分け、初回は`prune: false`とする。
+- activationはCLI resumeではなく、外側Kustomizationと内側HelmReleaseを同一Git commitでfalseにする別PRで行う。activation PRマージ前のliveは既存Helm ownerのままで、成功後のdesired/runtime境界だけがFlux HelmReleaseになる。root reconciliationはGitのsuspend:trueを戻り先とする。特に、親Kustomizationが子Kustomizationを取り込む構造を自動検出で二重登録しない。controllers、CRDs、PVC/PV、Secret生成物、依存するカスタムリソースは境界と`dependsOn`を分け、初回は`prune: false`とする。
 
 ## liveにのみ存在するdesired workload
 

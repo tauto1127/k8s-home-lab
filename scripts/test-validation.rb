@@ -15,7 +15,8 @@ require "zlib"
 def build_fixture_schema_archive
   buffer = StringIO.new("".b)
   gzip = Zlib::GzipWriter.new(buffer)
-  gzip.mtime = 0
+  # Ruby 2.6 rewrites gzip mtime=0 to the current time; 1 is stable across processes.
+  gzip.mtime = 1
   Gem::Package::TarWriter.new(gzip) do |archive|
     content = "{}\n"
     archive.add_file_simple("gitrepository-source-v1.json", 0o644, content.bytesize) do |entry|
@@ -26,6 +27,46 @@ def build_fixture_schema_archive
   buffer.string
 end
 
+def build_fixture_chart_archive
+  previous_source_date_epoch = ENV["SOURCE_DATE_EPOCH"]
+  ENV["SOURCE_DATE_EPOCH"] = "0"
+  buffer = StringIO.new("".b)
+  gzip = Zlib::GzipWriter.new(buffer)
+  # Ruby 2.6 rewrites gzip mtime=0 to the current time; 1 is stable across processes.
+  gzip.mtime = 1
+  Gem::Package::TarWriter.new(gzip) do |archive|
+    content = "apiVersion: example.invalid/v1\nkind: FixtureCRD\n"
+    path = "external-secrets/templates/crds/fixture.yaml"
+    archive.add_file_simple(path, 0o644, content.bytesize) { |entry| entry.write(content) }
+  end
+  gzip.close
+  buffer.string
+ensure
+  if previous_source_date_epoch
+    ENV["SOURCE_DATE_EPOCH"] = previous_source_date_epoch
+  else
+    ENV.delete("SOURCE_DATE_EPOCH")
+  end
+end
+
+def fixture_chart_crd_set_sha256(bytes)
+  files = {}
+  gzip = Zlib::GzipReader.new(StringIO.new(bytes))
+  Gem::Package::TarReader.new(gzip) do |archive|
+    archive.each { |entry| files[entry.full_name] = entry.read.b if entry.file? }
+  end
+  digest = Digest::SHA256.new
+  files.keys.sort.each do |path|
+    digest.update(path)
+    digest.update("\0")
+    digest.update(files.fetch(path))
+    digest.update("\0")
+  end
+  digest.hexdigest
+ensure
+  gzip&.close
+end
+
 ROOT = File.expand_path("..", __dir__)
 FIXTURES = File.join(__dir__, "fixtures")
 FAKE_KUBECTL_DIR = Dir.mktmpdir("flux-ownership-kubectl")
@@ -34,6 +75,8 @@ FAKE_CURL = File.join(FAKE_KUBECTL_DIR, "curl")
 FAKE_FLUX = File.join(FAKE_KUBECTL_DIR, "flux")
 FIXTURE_INSTALL_ASSET = "fixture Flux install asset v2.9.3\n"
 FIXTURE_SCHEMA_ASSET = build_fixture_schema_archive
+FIXTURE_CHART_ASSET = build_fixture_chart_archive
+FIXTURE_CHART_CRD_SET_SHA = fixture_chart_crd_set_sha256(FIXTURE_CHART_ASSET)
 File.write(FAKE_KUBECTL, <<~'SH')
   #!/usr/bin/env bash
   set -euo pipefail
@@ -69,12 +112,19 @@ fake_curl_script = <<~'SH'
     https://github.com/fluxcd/flux2/releases/download/v2.9.3/crd-schemas.tar.gz)
       ruby -rbase64 -e 'STDOUT.binmode; STDOUT.write(Base64.strict_decode64(ARGV.fetch(0)))' '__FIXTURE_SCHEMA_ARCHIVE__'
       ;;
+    https://github.com/external-secrets/external-secrets/releases/download/helm-chart-0.14.4/external-secrets-0.14.4.tgz)
+      ruby -rbase64 -e 'STDOUT.binmode; STDOUT.write(Base64.strict_decode64(ARGV.fetch(0)))' '__FIXTURE_CHART_ARCHIVE__'
+      ;;
+    https://fixture.invalid/external-secrets-0.14.4.tgz)
+      ruby -rbase64 -e 'STDOUT.binmode; STDOUT.write(Base64.strict_decode64(ARGV.fetch(0)))' '__FIXTURE_CHART_ARCHIVE__'
+      ;;
     *)
       exit 22
       ;;
   esac
 SH
 fake_curl_script = fake_curl_script.sub("__FIXTURE_SCHEMA_ARCHIVE__", Base64.strict_encode64(FIXTURE_SCHEMA_ASSET))
+fake_curl_script = fake_curl_script.gsub("__FIXTURE_CHART_ARCHIVE__", Base64.strict_encode64(FIXTURE_CHART_ASSET))
 File.write(FAKE_CURL, fake_curl_script)
 FileUtils.chmod(0o755, FAKE_CURL)
 File.write(FAKE_FLUX, <<~'SH')
@@ -752,10 +802,246 @@ Dir.mktmpdir("flux-reference-validation-test") do |temporary_root|
   assert((stdout + stderr).include?("HelmRepository sourceRef is missing or mismatched"), "missing HelmRepository was accepted")
 end
 
+Dir.mktmpdir("flux-activation-policy-test") do |temporary_root|
+  FileUtils.mkdir_p(File.join(temporary_root, "clusters/flux"))
+  FileUtils.mkdir_p(File.join(temporary_root, "clusters/pkg"))
+  FileUtils.mkdir_p(File.join(temporary_root, ".github"))
+  policy_path = File.join(temporary_root, ".github/manifest-policy.yaml")
+  flux_path = File.join(temporary_root, "clusters/flux/sync.yaml")
+  release_path = File.join(temporary_root, "clusters/pkg/release.yaml")
+  validator = File.join(ROOT, "scripts/validate-flux-ownership.rb")
+
+  inactive_flux = <<~YAML
+    apiVersion: kustomize.toolkit.fluxcd.io/v1
+    kind: Kustomization
+    metadata:
+      name: fixture-controller
+      namespace: flux-system
+    spec:
+      path: ./clusters/pkg
+      prune: false
+      suspend: true
+      sourceRef:
+        kind: GitRepository
+        name: flux-system
+  YAML
+  inactive_release = <<~YAML
+    apiVersion: helm.toolkit.fluxcd.io/v2
+    kind: HelmRelease
+    metadata:
+      name: fixture-release
+      namespace: fixture-system
+    spec:
+      suspend: true
+      releaseName: fixture-release
+      targetNamespace: fixture-system
+      storageNamespace: fixture-system
+      chart:
+        spec:
+          chart: external-secrets
+          version: 0.14.4
+          sourceRef:
+            kind: HelmRepository
+            name: fixture-repository
+            namespace: flux-system
+      install:
+        crds: Skip
+        disableTakeOwnership: true
+      upgrade:
+        crds: Skip
+        disableTakeOwnership: true
+      values:
+        installCRDs: true
+  YAML
+  activation_policy = <<~YAML
+    bootstrapManagedSources:
+      - apiVersion: source.toolkit.fluxcd.io/v1
+        kind: GitRepository
+        namespace: flux-system
+        name: flux-system
+    fluxActivation:
+      phase: test-fixture-helm-adoption
+      reason: Fixture activation requires the outer and inner resources together.
+      activeKustomizations:
+        - apiVersion: kustomize.toolkit.fluxcd.io/v1
+          kind: Kustomization
+          namespace: flux-system
+          name: fixture-controller
+          path: ./clusters/pkg
+          inventory:
+            - apiVersion: v1
+              kind: Namespace
+              namespace: ""
+              name: fixture-system
+            - apiVersion: source.toolkit.fluxcd.io/v1
+              kind: HelmRepository
+              namespace: flux-system
+              name: fixture-repository
+            - apiVersion: helm.toolkit.fluxcd.io/v2
+              kind: HelmRelease
+              namespace: fixture-system
+              name: fixture-release
+      activeHelmReleases:
+        - apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          namespace: fixture-system
+          name: fixture-release
+          owner:
+            apiVersion: kustomize.toolkit.fluxcd.io/v1
+            kind: Kustomization
+            namespace: flux-system
+            name: fixture-controller
+          chart:
+            name: external-secrets
+            version: 0.14.4
+            repository:
+              apiVersion: source.toolkit.fluxcd.io/v1
+              kind: HelmRepository
+              namespace: flux-system
+              name: fixture-repository
+              url: https://charts.external-secrets.io
+            artifact:
+              url: https://fixture.invalid/external-secrets-0.14.4.tgz
+              sha256: #{Digest::SHA256.hexdigest(FIXTURE_CHART_ASSET)}
+              crdTemplates:
+                pathPrefix: external-secrets/templates/crds/
+                count: 1
+                sha256: #{FIXTURE_CHART_CRD_SET_SHA}
+          safety:
+            installCRDs: true
+  YAML
+  File.write(policy_path, activation_policy)
+  File.write(File.join(temporary_root, "clusters/pkg/kustomization.yaml"), "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: [namespace.yaml, repo.yaml, release.yaml]\n")
+  File.write(File.join(temporary_root, "clusters/pkg/namespace.yaml"), "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: fixture-system\n")
+  File.write(File.join(temporary_root, "clusters/pkg/repo.yaml"), "apiVersion: source.toolkit.fluxcd.io/v1\nkind: HelmRepository\nmetadata:\n  name: fixture-repository\n  namespace: flux-system\nspec:\n  interval: 1h\n  url: https://charts.external-secrets.io\n")
+
+  File.write(flux_path, inactive_flux.sub("suspend: true", "suspend: false"))
+  File.write(release_path, inactive_release.sub("suspend: true", "suspend: false"))
+  assert_success("ruby", validator, temporary_root)
+
+  unknown_phase_document = YAML.safe_load(activation_policy, permitted_classes: [], permitted_symbols: [], aliases: false)
+  unknown_phase_document["fluxActivation"]["phase"] = "unexpected-phase"
+  File.write(policy_path, YAML.dump(unknown_phase_document))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("fluxActivation phase is not recognized: unexpected-phase"), "unknown activation phase was accepted")
+  File.write(policy_path, activation_policy)
+
+  File.write(release_path, inactive_release)
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("approved active HelmRelease"), "activation policy accepted a suspended inner HelmRelease")
+
+  unsafe_release = inactive_release
+    .sub("suspend: true", "suspend: false")
+    .sub("disableTakeOwnership: true", "disableTakeOwnership: false")
+  File.write(release_path, unsafe_release)
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("install.disableTakeOwnership must be true"), "active HelmRelease was allowed to take ownership")
+
+  File.write(flux_path, inactive_flux)
+  File.write(release_path, inactive_release.sub("suspend: true", "suspend: false"))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("rendered by a suspended Flux Kustomization"), "activation policy accepted an active inner HelmRelease under a suspended owner")
+
+  File.write(flux_path, inactive_flux.sub("suspend: true", "suspend: false"))
+  File.write(release_path, inactive_release.sub("suspend: true", "suspend: false"))
+  policy_document = YAML.safe_load(activation_policy, permitted_classes: [], permitted_symbols: [], aliases: false)
+  policy_document["fluxActivation"]["activeHelmReleases"] = []
+  File.write(policy_path, YAML.dump(policy_document))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("active HelmRelease policy must exactly match active Kustomization inventory"), "empty active HelmRelease policy was accepted")
+
+  policy_document = YAML.safe_load(activation_policy, permitted_classes: [], permitted_symbols: [], aliases: false)
+  policy_document["fluxActivation"]["activeHelmReleases"][0]["name"] = "missing"
+  File.write(policy_path, YAML.dump(policy_document))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("approved active HelmRelease is missing"), "stale active HelmRelease policy identity was accepted")
+
+  policy_document = YAML.safe_load(activation_policy, permitted_classes: [], permitted_symbols: [], aliases: false)
+  policy_document["fluxActivation"]["activeKustomizations"][0]["path"] = "./clusters/other"
+  File.write(policy_path, YAML.dump(policy_document))
+  File.write(flux_path, inactive_flux.sub("suspend: true", "suspend: false"))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("active Kustomization path must be ./clusters/other"), "active Kustomization path change was accepted")
+
+  File.write(flux_path, inactive_flux.sub("suspend: true", "suspend: false"))
+  File.write(release_path, inactive_release.sub("suspend: true", "suspend: false"))
+  policy_document = YAML.safe_load(activation_policy, permitted_classes: [], permitted_symbols: [], aliases: false)
+  policy_document["fluxActivation"]["activeHelmReleases"][0]["chart"]["version"] = "9.9.9"
+  File.write(policy_path, YAML.dump(policy_document))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("chart version must be 9.9.9"), "active HelmRelease chart version drift was accepted")
+
+  File.write(policy_path, activation_policy)
+  inventory_document = YAML.safe_load(activation_policy, permitted_classes: [], permitted_symbols: [], aliases: false)
+  inventory_document["fluxActivation"]["activeKustomizations"][0]["inventory"].shift
+  File.write(policy_path, YAML.dump(inventory_document))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("rendered inventory mismatch"), "active Kustomization inventory drift was accepted")
+
+  File.write(policy_path, activation_policy)
+  repository_path = File.join(temporary_root, "clusters/pkg/repo.yaml")
+  repository = File.read(repository_path)
+  File.write(repository_path, repository.sub("https://charts.external-secrets.io", "https://example.invalid"))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("HelmRepository URL must be https://charts.external-secrets.io"), "active HelmRepository URL drift was accepted")
+  File.write(repository_path, repository)
+
+  phase_bypass_document = YAML.safe_load(activation_policy, permitted_classes: [], permitted_symbols: [], aliases: false)
+  phase_bypass_document["fluxActivation"]["activeKustomizations"][0]["name"] = "eso-controller"
+  phase_bypass_document["fluxActivation"]["activeHelmReleases"][0]["namespace"] = "external-secrets"
+  phase_bypass_document["fluxActivation"]["activeHelmReleases"][0]["name"] = "external-secrets"
+  File.write(policy_path, YAML.dump(phase_bypass_document))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("Flux ESO controller identities must use fluxActivation phase eso-controller"), "ESO identities bypassed their fixed contract by changing phase")
+
+  self_approved_source_document = YAML.safe_load(activation_policy, permitted_classes: [], permitted_symbols: [], aliases: false)
+  self_approved_source_document["fluxActivation"]["phase"] = "eso-controller"
+  self_approved_source_document["fluxActivation"]["activeHelmReleases"][0]["chart"]["repository"]["url"] = "https://example.invalid"
+  File.write(policy_path, YAML.dump(self_approved_source_document))
+  File.write(repository_path, repository.sub("https://charts.external-secrets.io", "https://example.invalid"))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("fluxActivation eso-controller activeHelmReleases contract must exactly match"), "ESO policy and manifest could self-approve an unexpected HelmRepository URL")
+  File.write(repository_path, repository)
+
+  artifact_document = YAML.safe_load(activation_policy, permitted_classes: [], permitted_symbols: [], aliases: false)
+  artifact_document["fluxActivation"]["activeHelmReleases"][0]["chart"]["artifact"]["sha256"] = "0" * 64
+  File.write(policy_path, YAML.dump(artifact_document))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("upstream artifact checksum mismatch"), "active chart artifact checksum drift was accepted")
+
+  artifact_url_document = YAML.safe_load(activation_policy, permitted_classes: [], permitted_symbols: [], aliases: false)
+  artifact_url_document["fluxActivation"]["activeHelmReleases"][0]["chart"]["artifact"]["url"] = "http://example.invalid/external-secrets-0.14.4.tgz"
+  File.write(policy_path, YAML.dump(artifact_url_document))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("chart.artifact.url must use HTTPS"), "non-HTTPS active chart artifact URL was accepted")
+
+  crd_document = YAML.safe_load(activation_policy, permitted_classes: [], permitted_symbols: [], aliases: false)
+  crd_document["fluxActivation"]["activeHelmReleases"][0]["chart"]["artifact"]["crdTemplates"]["sha256"] = "0" * 64
+  File.write(policy_path, YAML.dump(crd_document))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("CRD template inventory checksum mismatch"), "active chart CRD template drift was accepted")
+
+  owner_document = YAML.safe_load(activation_policy, permitted_classes: [], permitted_symbols: [], aliases: false)
+  owner_document["fluxActivation"]["activeHelmReleases"][0]["owner"]["name"] = "other-controller"
+  File.write(policy_path, YAML.dump(owner_document))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("owner must be an approved active Kustomization"), "active HelmRelease owner drift was accepted")
+
+  File.write(policy_path, activation_policy)
+  File.write(release_path, inactive_release.sub("suspend: true", "suspend: false").sub("installCRDs: true", "installCRDs: false"))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("spec.values.installCRDs must be true"), "active chart could omit the existing template-managed CRDs")
+
+  File.write(release_path, inactive_release.sub(/spec:\n(?:  .*\n|\n)*/m, "spec: invalid\n"))
+  stdout, stderr = assert_failure("ruby", validator, temporary_root)
+  assert((stdout + stderr).include?("spec must be a mapping"), "malformed active HelmRelease spec did not fail clearly: #{stdout + stderr}")
+end
+
 Dir.mktmpdir("flux-render-and-gate-validation-test") do |temporary_root|
   FileUtils.mkdir_p(File.join(temporary_root, "clusters/flux"))
   FileUtils.mkdir_p(File.join(temporary_root, ".github"))
-  File.write(File.join(temporary_root, ".github/manifest-policy.yaml"), "bootstrapManagedSources:\n  - apiVersion: source.toolkit.fluxcd.io/v1\n    kind: GitRepository\n    namespace: flux-system\n    name: flux-system\n")
+  policy_path = File.join(temporary_root, ".github/manifest-policy.yaml")
+  File.write(policy_path, "bootstrapManagedSources:\n  - apiVersion: source.toolkit.fluxcd.io/v1\n    kind: GitRepository\n    namespace: flux-system\n    name: flux-system\n")
   FileUtils.mkdir_p(File.join(temporary_root, "clusters/pkg"))
   File.write(File.join(temporary_root, "clusters/pkg/kustomization.yaml"), "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: [rendered.yaml]\n")
   File.write(File.join(temporary_root, "clusters/pkg/rendered.yaml"), <<~YAML)
@@ -805,6 +1091,22 @@ Dir.mktmpdir("flux-render-and-gate-validation-test") do |temporary_root|
   File.write(flux_path, valid)
   assert_success("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
 
+  blocked_package = File.join(temporary_root, "clusters/home/packages/nextcloud")
+  FileUtils.mkdir_p(blocked_package)
+  FileUtils.cp(File.join(temporary_root, "clusters/pkg/kustomization.yaml"), blocked_package)
+  FileUtils.cp(File.join(temporary_root, "clusters/pkg/rendered.yaml"), blocked_package)
+  disguised_outer = valid
+    .sub("name: nextcloud", "name: disguised-workload")
+    .sub("path: ./clusters/pkg", "path: ./clusters/home/packages/nextcloud")
+    .sub("      flux.takutk.com/activation-blocked: \"true\"\n", "")
+    .sub("suspend: true", "suspend: false")
+  File.write(flux_path, disguised_outer)
+  stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+  disguised_output = stdout + stderr
+  assert(disguised_output.include?("Nextcloud package path must remain suspended"), "renamed outer Kustomization bypassed the blocked Nextcloud path")
+  assert(disguised_output.include?("renders a blocked Nextcloud object"), "renamed outer Kustomization bypassed the blocked Nextcloud inventory")
+  File.write(flux_path, valid)
+
   File.write(File.join(temporary_root, "clusters/pkg/rendered.yaml"), File.read(File.join(temporary_root, "clusters/pkg/rendered.yaml")).sub("suspend: true", "suspend: false"))
   stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
   assert((stdout + stderr).include?("suspend must be true"), "rendered HelmRelease suspend:false was accepted")
@@ -818,6 +1120,33 @@ Dir.mktmpdir("flux-render-and-gate-validation-test") do |temporary_root|
   File.write(File.join(temporary_root, "clusters/pkg/rendered.yaml"), rendered.split("---").first)
   stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
   assert((stdout + stderr).include?("Nextcloud HelmRelease is required"), "inner Nextcloud HelmRelease omission was accepted")
+
+  File.write(policy_path, <<~YAML)
+    bootstrapManagedSources:
+      - apiVersion: source.toolkit.fluxcd.io/v1
+        kind: GitRepository
+        namespace: flux-system
+        name: flux-system
+    fluxActivation:
+      phase: forbidden-nextcloud
+      reason: Fixture proves the activation-blocked package cannot be allowlisted active.
+      activeKustomizations:
+        - apiVersion: kustomize.toolkit.fluxcd.io/v1
+          kind: Kustomization
+          namespace: flux-system
+          name: nextcloud
+      activeHelmReleases:
+        - apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          namespace: nextcloud
+          name: nextcloud
+  YAML
+  File.write(flux_path, valid.sub("suspend: true", "suspend: false"))
+  File.write(File.join(temporary_root, "clusters/pkg/rendered.yaml"), rendered.sub("suspend: true", "suspend: false"))
+  stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+  output = stdout + stderr
+  assert(output.include?("Nextcloud Flux Kustomization must remain suspended"), "Nextcloud outer activation was allowlisted")
+  assert(output.include?("Nextcloud HelmRelease must remain suspended"), "Nextcloud inner activation was allowlisted")
 end
 
 Dir.mktmpdir("flux-order-and-source-validation-test") do |temporary_root|
