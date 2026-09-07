@@ -85,10 +85,22 @@ digestが`sha256:cfda856bdfab922a92c1e0ca199811edae21ad529484f3669b8233e81316877
 - HelmRepository/HelmChart取得失敗、chart digest不一致、upgrade失敗、5分timeout、
   Deployment非Ready、予期しないchart/revision/resource変更、他packageのreconcile、
   Secret値が出力されそうな操作で即停止する。
-- `flux resume`、手動`kubectl patch`、`helm upgrade/rollback/uninstall`は行わない。
-- まずactivation commitをrevertする別PRを作り、outer/innerを同じcommitで`suspend: true`へ戻す。
-  suspendは将来のreconcileを止めるだけで、既に行われたHelm upgradeをrollbackしない。
-- Helm rollbackやresource修復が必要なら、read-only evidenceを保存した後、別の明示承認を得る。
+- `flux resume`、`helm upgrade/rollback/uninstall`は行わない。手動patchは以下の別途承認された緊急停止だけを例外とする。
+- まず、outer Kustomizationとinner HelmReleaseを同じ変更で`suspend: true`へ戻す、検証済みのactivation commit revert PRを作成・マージする。片側だけを有効化するGit変更はvalidatorが拒否するため、innerだけを先に戻すGit PRは作らない。
+- revertのマージ後、read-onlyでrootがrevertのGit SHAを適用済みであることと、outer `flux-system/eso-controller` が`suspend: true`になったことを確認する。rootの適用またはouter停止を確認できない場合は停止し、別の明示承認なしに次へ進まない。
+- outerが停止したことを確認した後、inner `external-secrets/external-secrets` が存在する場合に限り、緊急封じ込めとして、別途明示承認を得た直接のcluster writeでinnerも`suspend: true`にする。これはGitの代替ではなく、Git revertだけではouter停止後にinnerへ届かないための必須手順である。read-only確認に失敗した状態でのinner patchや、outer停止前のpatchは行わない。この直接patchはこのrunbookでは実行していない。
+
+  ```bash
+  # read-only: rootのrevert SHAとouter停止を確認する
+  ssh kube 'kubectl get -n flux-system kustomization flux-system eso-controller -o custom-columns=NAME:.metadata.name,SUSPEND:.spec.suspend,LAST_APPLIED:.status.lastAppliedRevision,OBSERVED_GEN:.status.observedGeneration'
+  # 別途明示承認後のみ実行するcluster write（このrunbookでは未実行）
+  ssh kube 'kubectl patch -n external-secrets helmrelease external-secrets --type=merge -p '\''{"spec":{"suspend":true}}'\'''
+  # read-only: innerの停止を確認する
+  ssh kube 'kubectl get -n external-secrets helmrelease external-secrets -o custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name,SUSPEND:.spec.suspend'
+  ```
+
+- 直接停止後、上記の選択フィールドをread-onlyで再確認し、outer/innerの`suspend: true`とrevert後のGit desiredの一致を記録する。停止前に開始したouter reconciliationが遅れてinnerを書き戻す可能性があるため、outerの`Reconciling=True`が解消した後にも再確認する。innerがfalseへ戻る、または進行中処理の終了を確認できない場合は停止完了と扱わず、追加の対処を判断する。
+- `suspend`は将来のreconcileを止めるだけで、既に進行中または完了したHelm upgradeを自動rollbackしない。Helm rollbackやresource修復が必要なら、read-only evidenceを保存した後、別の明示承認を得る。
 - ESO controllerが安定するまでESO config、CSIのactivation PRを作成・マージしない。
 
 一次資料:
