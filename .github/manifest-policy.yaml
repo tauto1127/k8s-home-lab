@@ -64,11 +64,48 @@ fluxActivation:
       kind: Kustomization
       namespace: flux-system
       name: eso-controller
+      path: ./clusters/home/packages/eso-controller
+      inventory:
+        - apiVersion: v1
+          kind: Namespace
+          namespace: ""
+          name: external-secrets
+        - apiVersion: source.toolkit.fluxcd.io/v1
+          kind: HelmRepository
+          namespace: flux-system
+          name: external-secrets
+        - apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          namespace: external-secrets
+          name: external-secrets
   activeHelmReleases:
     - apiVersion: helm.toolkit.fluxcd.io/v2
       kind: HelmRelease
       namespace: external-secrets
       name: external-secrets
+      owner:
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        namespace: flux-system
+        name: eso-controller
+      chart:
+        name: external-secrets
+        version: 0.14.4
+        repository:
+          apiVersion: source.toolkit.fluxcd.io/v1
+          kind: HelmRepository
+          namespace: flux-system
+          name: external-secrets
+          url: https://charts.external-secrets.io
+        artifact:
+          url: https://github.com/external-secrets/external-secrets/releases/download/helm-chart-0.14.4/external-secrets-0.14.4.tgz
+          sha256: cfda856bdfab922a92c1e0ca199811edae21ad529484f3669b8233e813168779
+          crdTemplates:
+            pathPrefix: external-secrets/templates/crds/
+            count: 19
+            sha256: 5fa17b33c731ab29d089f2bfd350342b002c6758db9ad7f7667c71c809f23ab5
+      safety:
+        installCRDs: true
 
 fluxBootstrap:
   reason: Pin the zero-Flux installation inputs and keep bootstrap/root ownership distinct from suspended workload packages.

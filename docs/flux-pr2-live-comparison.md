@@ -67,7 +67,11 @@ liveで一致した。同じ対象を管理するArgo Applicationまたは別の
 この結果は非Secretのrendered stateとHelm ownership metadataの一致を示すが、Flux
 helm-controllerによる初回upgradeが成功したことは示さない。activation PRでは
 release/target/storage namespaceを明示し、install/upgradeとも`disableTakeOwnership: true`、
-`crds: Skip`として、ownership不一致やCRD変更を成功扱いしない。
+`crds: Skip`とする。ただしESO 0.14.4のCRD 19件はchartの`crds/`ではなく
+`templates/crds/`の通常templateであり、`crds: Skip`だけでは除外されない。既存releaseから
+template-managed CRDを削除する差分を避けるため`installCRDs: true`を維持し、公式chart archiveの
+SHA256、CRD templateのpath/count/集合SHA256、active packageのrender inventoryをCI policyへ固定する。
+runtimeで取得されたHelmChart artifact digestは、マージ後のstatusでも別途照合する。
 
 ## unknown / activation blockers
 

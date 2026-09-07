@@ -22,7 +22,12 @@ ESO config、CSI、Nextcloudは対象外であり、`prune: false`を維持す�
   Secret 1件を比較対象から完全に除外し、残る37リソースをserver-side dry-run diffした結果は差分0だった。
 - chart archiveのSHA256は
   `cfda856bdfab922a92c1e0ca199811edae21ad529484f3669b8233e813168779`で、公式chart
-  repository indexのdigestと一致した。
+  repository indexのdigestと一致した。取得元は
+  `https://github.com/external-secrets/external-secrets/releases/download/helm-chart-0.14.4/external-secrets-0.14.4.tgz`
+  に固定した。
+- ESO 0.14.4はCRDをchartの`crds/`ではなく`templates/crds/`配下の通常template 19件として
+  renderする。この19ファイルをpath昇順に並べ、各`path + NUL + bytes + NUL`を連結して求めた
+  SHA256は`5fa17b33c731ab29d089f2bfd350342b002c6758db9ad7f7667c71c809f23ab5`だった。
 - clusterはKubernetes v1.36.4である。一方、ESO v0.14.xのversioned support資料が
   保証対象としているKubernetesはv1.32であり、0.14.4は現在のsupport対象ではない。
   このPRは既に稼働中のversionをFluxへ移すだけでupgradeしないため、既存の互換性負債を
@@ -38,15 +43,22 @@ chart/versionが同じでも初回reconcileはno-opとは仮定しない。
 - `clusters/home/flux-system/sync.yaml`: `eso-controller`だけを`suspend: false`
 - `clusters/home/packages/eso-controller/helmrelease.yaml`: `external-secrets`だけを`suspend: false`。
   release/target/storage namespaceを明示し、install/upgradeとも`disableTakeOwnership: true`と
-  `crds: Skip`にして、ownership不一致とCRD変更をfail-closedにする
-- `.github/manifest-policy.yaml`: 現在activeであることを許可する上記2 identityを明示
+  `crds: Skip`にする。`crds: Skip`はchartの`crds/`ディレクトリだけに作用し、ESOの
+  `templates/crds/`を除外しない。既存Helm releaseからtemplate-managed CRDを削除する変更を
+  避けるため`installCRDs: true`を維持する
+- `.github/manifest-policy.yaml`: activeなKustomization/HelmReleaseのidentityに加え、package path、
+  render inventory、owner、chart名/version、HelmRepository URL、公式chart artifact SHA256、
+  CRD template 19件の集合SHA256を固定する。ESO identityを別phase名へ移す変更を含め、
+  `eso-controller`の完全な境界はvalidator側の独立した定数とも一致しなければならない
 - ESO config、CSI、Nextcloudの外側Kustomizationは`suspend: true`、`prune: false`
 - Nextcloudの内側HelmReleaseは`suspend: true`、両方の
   `flux.takutk.com/activation-blocked: "true"`を維持
 
-validatorは、許可されていない`suspend: false`、片側だけの有効化、存在しないidentity、
-active HelmReleaseをsuspended owner配下へ置く構成、明示的なrelease/target/storage namespace・
-ownership/CRD safety設定の欠落、Nextcloudの有効化をfail-closedで拒否する。
+validatorは、許可されていない`suspend: false`、片側だけの有効化、path/inventory/ownerの差替え、
+chart/repository/artifact/CRD template集合のdrift、明示的なrelease/target/storage namespace・
+`disableTakeOwnership`・`installCRDs`の欠落、Nextcloudの有効化をfail-closedで拒否する。
+これはGit/CIの固定であり、Fluxがruntimeに取得したHelmChart artifactはマージ後のstatus digestでも
+照合する。
 
 ## Merge後の確認（5分timeout）
 
@@ -64,7 +76,9 @@ ssh kube 'helm list -n external-secrets'
 
 成功条件は、ESO outer KustomizationとHelmReleaseがReady、Helm releaseがdeployed、
 Deployment 3件がAvailable、Pod 3件がReadyであること。さらにESO config、CSI、Nextcloudが
-suspendedのままで、Nextcloudのactivation-blocked annotationが維持されていることを確認する。
+suspendedのままで、Nextcloudのactivation-blocked annotationが維持され、HelmChart artifact
+digestが`sha256:cfda856bdfab922a92c1e0ca199811edae21ad529484f3669b8233e813168779`
+と一致することを確認する。
 
 ## Stop / rollback
 
@@ -80,5 +94,6 @@ suspendedのままで、Nextcloudのactivation-blocked annotationが維持され
 一次資料:
 
 - [Flux HelmRelease reconciliation](https://fluxcd.io/flux/components/helm/helmreleases/)
+- [Flux HelmChart artifacts](https://fluxcd.io/flux/components/source/helmcharts/)
 - [Flux Kustomization suspend and health checks](https://fluxcd.io/flux/components/kustomize/kustomizations/)
 - [ESO v0.14.4 stability and support](https://external-secrets.io/v0.14.4/introduction/stability-support/)
