@@ -62,7 +62,7 @@ Secrets Store CSI Driver 1.4.8の公式chart archiveは、次のURLとSHA256で�
 ClusterRoleBinding 1件、DaemonSet 1件、CSIDriver 1件の10 resourceで、default renderの
 8 transient CRD hook objectを除いた集合と一致した。server diffはemptyだった。既存CRDの
 名前・schema・ownerが選択フィールドで一致しない場合は停止し、CRD修復やupgradeを別承認に分ける。
-live DaemonSetは2/2 Readyだが、node image IDの差とworker側のrestart履歴（controller側1回に対し
+live DaemonSetは2/2 Readyだが、nodeごとのcontainer image IDの差とworker側のrestart履歴（controller側1回に対し
 worker側約30回）は残存リスクとしてactivation後も観測する。
 - Nextcloud live DeploymentはHelm labels/chart labelと1 replica。GitにはHelmReleaseを
   定義するが、PR #36の全values、init container、NFS、service annotations、TLS Secret、
@@ -87,7 +87,10 @@ release/target/storage namespaceを明示し、install/upgradeとも`disableTake
 `templates/crds/`の通常templateであり、`crds: Skip`だけでは除外されない。既存releaseから
 template-managed CRDを削除する差分を避けるため`installCRDs: true`を維持し、公式chart archiveの
 SHA256、CRD templateのpath/count/集合SHA256、active packageのrender inventoryをCI policyへ固定する。
-runtimeで取得されたHelmChart artifact digestは、マージ後のstatusでも別途照合する。
+runtimeで取得されたHelmChart artifact digestは、マージ後に
+`flux-system/kube-system-csi-secrets-store` のstatusで照合し、
+`sha256:894ee5351f615184af4ad0f4ea03be35485e65bc1797c10e315fcd1bcc3aef13` と一致しなければ
+後続activationを止めてrevert/suspendする。
 
 ## unknown / activation blockers
 

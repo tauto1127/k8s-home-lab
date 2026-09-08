@@ -55,6 +55,12 @@ def test_cumulative_activation_validation
   failures = []
   validate_activation_phase_contract!(previous_config_activation, failures)
   assert(failures.empty?, "previous eso-config phase contract was rejected: #{failures.join('; ')}")
+  assert(eso_config_active_phase?("eso-config"), "eso-config phase lost its cumulative ESO config contract")
+  assert(eso_config_active_phase?("csi-secrets-store"), "CSI phase lost its cumulative ESO config contract")
+  assert(!eso_config_active_phase?("eso-controller"), "ESO controller phase incorrectly gained ESO config resources")
+  assert(active_cluster_secret_store_policies_for_phase("eso-config").key?(ESO_CONFIG_STORE_IDENTITY), "eso-config phase lost ClusterSecretStore policy")
+  assert(active_cluster_secret_store_policies_for_phase("csi-secrets-store").key?(ESO_CONFIG_STORE_IDENTITY), "CSI phase lost ClusterSecretStore policy")
+  assert(active_cluster_secret_store_policies_for_phase("eso-controller").empty?, "ESO controller phase incorrectly gained ClusterSecretStore policy")
 
   csi_kustomization = CSI_SECRETS_STORE_ACTIVATION_CONTRACT.fetch("activeKustomizations").find { |entry| entry["name"] == "csi-secrets-store" }
   csi_release = CSI_SECRETS_STORE_ACTIVATION_CONTRACT.fetch("activeHelmReleases").find { |entry| entry["name"] == "csi-secrets-store" }
@@ -85,6 +91,9 @@ def test_cumulative_activation_validation
   store_failures = []
   validate_active_cluster_secret_store!(mutated_store, ESO_CONFIG_STORE_IDENTITY, {"spec" => ESO_CONFIG_STORE_SPEC}, store_failures)
   assert(store_failures.any? { |failure| failure.include?("spec must exactly match") }, "credential key drift was accepted")
+  csi_store_failures = []
+  validate_active_cluster_secret_store!(mutated_store, ESO_CONFIG_STORE_IDENTITY, active_cluster_secret_store_policies_for_phase("csi-secrets-store").fetch(ESO_CONFIG_STORE_IDENTITY), csi_store_failures)
+  assert(csi_store_failures.any? { |failure| failure.include?("spec must exactly match") }, "CSI phase accepted ClusterSecretStore spec drift")
 
   mutated_activation = Marshal.load(Marshal.dump(activation))
   mutated_activation.fetch("activeKustomizations").find { |entry| entry["name"] == "eso-config" }["inventory"].clear
@@ -143,6 +152,13 @@ def test_cumulative_activation_validation
   validate_eso_config_kustomization!({"spec" => {"wait" => false, "dependsOn" => [{"name" => "other"}]}}, config_failures)
   assert(config_failures.any? { |failure| failure.include?("wait must be true") }, "wait:false was accepted")
   assert(config_failures.any? { |failure| failure.include?("dependsOn must exactly") }, "dependency drift was accepted")
+  csi_config_failures = []
+  validate_eso_config_kustomization_for_phase!("csi-secrets-store", "eso-config", "flux-system", {"spec" => {"wait" => false, "dependsOn" => [{"name" => "other"}]}}, csi_config_failures)
+  assert(csi_config_failures.any? { |failure| failure.include?("wait must be true") }, "CSI phase accepted eso-config wait:false")
+  assert(csi_config_failures.any? { |failure| failure.include?("dependsOn must exactly") }, "CSI phase accepted eso-config dependency drift")
+  controller_config_failures = []
+  validate_eso_config_kustomization_for_phase!("eso-controller", "eso-config", "flux-system", {"spec" => {"wait" => false, "dependsOn" => [{"name" => "other"}]}}, controller_config_failures)
+  assert(controller_config_failures.empty?, "ESO controller phase incorrectly validated ESO config")
 
   csi_failures = []
   validate_csi_secrets_store_kustomization!({"spec" => {"wait" => true, "dependsOn" => [{"name" => "eso-config"}]}}, csi_failures)

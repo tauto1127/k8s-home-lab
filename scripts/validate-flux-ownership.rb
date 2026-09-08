@@ -336,6 +336,17 @@ ACTIVATION_PHASE_CONTRACTS = {
   # Its .invalid artifact URL makes it fail closed under the real CI transport.
   "test-fixture-helm-adoption" => TEST_FIXTURE_ACTIVATION_CONTRACT
 }.freeze
+ESO_CONFIG_ACTIVE_PHASES = %w[eso-config csi-secrets-store].freeze
+
+def eso_config_active_phase?(phase)
+  ESO_CONFIG_ACTIVE_PHASES.include?(phase.to_s)
+end
+
+def active_cluster_secret_store_policies_for_phase(phase)
+  return {} unless eso_config_active_phase?(phase)
+
+  {ESO_CONFIG_STORE_IDENTITY => ESO_CONFIG_STORE_POLICY.merge("spec" => ESO_CONFIG_STORE_SPEC)}
+end
 
 # Parse the YAML stream without permitting Ruby objects or aliases.
 def yaml_documents(content, source)
@@ -641,6 +652,12 @@ def validate_csi_secrets_store_kustomization!(document, failures)
   unless spec["dependsOn"] == [{"name" => "eso-config"}]
     failures << "active Kustomization csi-secrets-store: dependsOn must exactly be [{name: eso-config}]"
   end
+end
+
+def validate_eso_config_kustomization_for_phase!(phase, name, namespace, document, failures)
+  return unless eso_config_active_phase?(phase) && name == "eso-config" && namespace == "flux-system"
+
+  validate_eso_config_kustomization!(document, failures)
 end
 
 def validate_activation_chart_policy!(policy, identity, failures, artifact_cache)
@@ -1056,7 +1073,7 @@ if activation
     "HelmRelease",
     failures
   )
-  active_cluster_secret_store_policies = {ESO_CONFIG_STORE_IDENTITY => ESO_CONFIG_STORE_POLICY.merge("spec" => ESO_CONFIG_STORE_SPEC)} if activation["phase"] == "eso-config"
+  active_cluster_secret_store_policies = active_cluster_secret_store_policies_for_phase(activation["phase"])
   approved_active_kustomizations = active_kustomization_policies.keys.to_set
   approved_active_helm_releases = active_helm_release_policies.keys.to_set
   raise "#{FLUX_ACTIVATION_POLICY_KEY} must approve at least one active Kustomization" if approved_active_kustomizations.empty?
@@ -1171,9 +1188,7 @@ flux_entries.each do |source_path, resource|
     failures << "approved active Flux Kustomization #{name}: suspend must be false" unless spec["suspend"] == false
     expected_path = active_kustomization_policies.fetch(flux_id)["path"]
     failures << "active Kustomization path must be #{expected_path}: #{flux_id}" unless spec["path"] == expected_path
-    if activation && activation["phase"] == "eso-config" && name == "eso-config" && namespace == "flux-system"
-      validate_eso_config_kustomization!(resource, failures)
-    end
+    validate_eso_config_kustomization_for_phase!(activation&.fetch("phase", nil), name, namespace, resource, failures)
     if activation && activation["phase"] == "csi-secrets-store" && name == "csi-secrets-store" && namespace == "flux-system"
       validate_csi_secrets_store_kustomization!(resource, failures)
     end

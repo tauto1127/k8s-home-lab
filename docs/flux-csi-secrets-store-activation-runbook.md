@@ -32,14 +32,16 @@ ESO controller と `ClusterSecretStore/secret-store-provider` は先行 phase �
 - [x] Git desired: CSI packageは有効、Nextcloudは停止、全 package の `prune: false` を固定（live post-merge状態は未確認）
 - [ ] merge後の `csi-secrets-store`/Nextcloudのlive suspend・Ready状態を保存
 
-> Warning (not an activation stop by itself): the live DaemonSet is Ready 2/2, but node image
-> IDs differ and worker restart history is higher than the controller. The merge gate is an
+> Warning (not an activation stop by itself): the live DaemonSet is Ready 2/2, but container image
+> IDs per node differ and worker restart history is higher than the controller. The merge gate is an
 > unchanged or explained image-ID/restart baseline and no unexpected rollout; the image-ID
 > difference alone is not a blocker because the stable server diff is empty.
 
 policy は公式 archive SHA256、`crds/` 2件の集合SHA256、stable no-hooks inventory 10件を固定する。
 CRD集合SHA256は、archive pathを昇順に並べ、各 `path + NUL + file bytes + NUL` を連結して
-SHA256化する既存validatorのアルゴリズムで再計算する。
+SHA256化する既存validatorのアルゴリズムで再計算する。CIのarchive digest gateは既知の
+archive bytesを固定するが、Flux HelmRepositoryはsemverからruntime HelmChart artifactを解決するため、
+この2つは同一性を自動的に保証しない。
 chartのstable inventory gateはCRDをapiVersion/kind/namespace/nameのidentityだけで比較する。
 CRDはHelm childのrelease ownership annotationを期待する対象ではなく、live側のschema・version・
 owner metadataは別のread-only preflightで確認する。
@@ -77,13 +79,17 @@ ssh kube 'kubectl wait -n flux-system kustomization/csi-secrets-store --for=cond
 ssh kube 'kubectl wait -n kube-system helmrelease/csi-secrets-store --for=condition=ready --timeout=5m'
 ssh kube 'kubectl get -n kube-system helmrelease csi-secrets-store -o custom-columns=NAME:.metadata.name,CHART:.spec.chart.spec.chart,VERSION:.spec.chart.spec.version,RELEASE:.spec.releaseName,TARGET:.spec.targetNamespace,STORAGE:.spec.storageNamespace,SUSPEND:.spec.suspend'
 ssh kube 'kubectl get -n kube-system daemonset csi-secrets-store-secrets-store-csi-driver -o custom-columns=NAME:.metadata.name,DESIRED:.status.desiredNumberScheduled,READY:.status.numberReady,UPDATED:.status.updatedNumberScheduled'
+ssh kube 'kubectl get -n flux-system helmchart kube-system-csi-secrets-store -o custom-columns=NAME:.metadata.name,REVISION:.status.artifact.revision,DIGEST:.status.artifact.digest'
 ```
 
 成功条件は outer/inner とも Ready、DaemonSet が desired 数で Ready、Helm ownership collision
 なし、ESO controller/config Ready、Nextcloud outer/inner が停止中であることに加え、preflight
-baselineから予期しないrolloutがなく、image ID/restart差分が不変または説明済みであること。
+baselineから予期しないrolloutがなく、image ID/restart差分が不変または説明済みであること、
+`flux-system/kube-system-csi-secrets-store` の `.status.artifact.digest` が
+`sha256:894ee5351f615184af4ad0f4ea03be35485e65bc1797c10e315fcd1bcc3aef13` と完全一致すること。
 image ID差分だけでは停止しない。HelmChart のruntime artifact digestは、preflightで記録された
-値と別途照合する。
+値と別途照合する。不一致、取得失敗、またはdigest欠落ならCSI受入れを停止し、後続activationを
+進めず、outer/innerをsuspendへ戻すrevert pathを使う。
 
 ## Failure / rollback
 
