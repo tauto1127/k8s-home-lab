@@ -36,6 +36,7 @@ PVC、PV、namespace、CRD、privileged bindingは、初回移行時に
 | `apps/jellyfin/helmfile.yaml` | migration-pending | render結果とlive resourceを比較してから変換する。 |
 | `apps/memos/chart/**`, `apps/memos/helmfile.yaml` | migration-pending | local chartはCIでlintとrenderを行っている。Flux HelmReleaseへ変換する。 |
 | `apps/metube/*.yaml`, `apps/mortis/*.yaml` | flux-candidate | raw workload package。 |
+| `clusters/home/packages/mortis/*`, `clusters/home/flux-system/sync.yaml` | migration-pending | Mortis preparation package。live parity確認済み、初回は`suspend: true`・`prune: false`。Activationは別PR。MemosのServiceを参照するが所有しない。 |
 | `apps/n8n/test-pvc.yaml`, `kustomization.yaml` | flux-candidate | ファイル名に反して、Helm releaseが参照するliveのn8n PVC 3個を定義している。 |
 | `apps/n8n/helmfile.yaml` | migration-pending | releaseとExternalSecretのextra objectを一緒に変換する。 |
 | `apps/nextcloud/helmfile.yaml` | migration-pending | chart 9.1.3、liveのNextcloud image digest、liveのExternalSecret target/store/remote keyを安全なフィールドだけで一致確認した。PR #36の全valuesは未証明のため、Flux HelmReleaseは停止状態で残す。 |

@@ -1679,5 +1679,36 @@ Dir.mktmpdir("flux-bootstrap-validation-test") do |temporary_root|
   assert((stdout + stderr).include?("Kustomize renderer is unavailable"), "unavailable bootstrap renderer was accepted")
 end
 
+def test_mortis_preparation_contract
+  package_root = File.join(ROOT, "clusters/home/packages/mortis")
+  package_kustomization = YAML.safe_load(File.read(File.join(package_root, "kustomization.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
+  assert(package_kustomization["resources"] == ["mortis.yaml"], "Mortis package composition drifted")
+
+  resources = File.read(File.join(package_root, "mortis.yaml")).split(/^---[ \t]*(?:#.*)?$\n?/).filter_map do |document|
+    next if document.strip.empty?
+    YAML.safe_load(document, permitted_classes: [], permitted_symbols: [], aliases: false)
+  end
+  identities = resources.map { |resource| [resource["apiVersion"], resource["kind"], resource.dig("metadata", "namespace").to_s, resource.dig("metadata", "name")].join("/") }
+  assert(identities == ["v1/Namespace//mortis", "v1/Service/mortis/mortis", "apps/v1/Deployment/mortis/mortis"], "Mortis package resource inventory drifted")
+
+  deployment = resources.find { |resource| resource["kind"] == "Deployment" }
+  container = deployment.dig("spec", "template", "spec", "containers", 0)
+  assert(container["image"] == "ghcr.io/mudkipme/mortis:0.29.0", "Mortis image drifted")
+  assert(container.dig("args", 2) == "-grpc-addr=memos.memos.svc.cluster.local:5230", "Mortis Memos dependency drifted")
+  assert(deployment.dig("spec", "template", "spec", "volumes").nil?, "Mortis preparation unexpectedly gained volumes")
+  assert(resources.none? { |resource| ["Secret", "PersistentVolume", "PersistentVolumeClaim"].include?(resource["kind"]) }, "Mortis package contains protected resource types")
+
+  sync = File.read(File.join(ROOT, "clusters/home/flux-system/sync.yaml")).split(/^---[ \t]*(?:#.*)?$\n?/).filter_map do |document|
+    next if document.strip.empty?
+    YAML.safe_load(document, permitted_classes: [], permitted_symbols: [], aliases: false)
+  end
+  mortis = sync.find { |resource| resource.dig("metadata", "name") == "mortis" }
+  assert(mortis, "Mortis Flux Kustomization is missing")
+  assert(mortis.dig("spec", "path") == "./clusters/home/packages/mortis", "Mortis Flux path drifted")
+  assert(mortis.dig("spec", "suspend") == true, "Mortis preparation must remain suspended")
+  assert(mortis.dig("spec", "prune") == false, "Mortis preparation must keep prune:false")
+end
+
+test_mortis_preparation_contract
 test_cumulative_activation_validation
 puts "Validation fixtures passed."
