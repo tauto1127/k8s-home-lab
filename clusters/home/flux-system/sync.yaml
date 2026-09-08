@@ -74,3 +74,20 @@ spec:
   sourceRef:
     kind: GitRepository
     name: flux-system
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: mortis
+  namespace: flux-system
+spec:
+  interval: 30m
+  retryInterval: 2m
+  timeout: 5m
+  path: ./clusters/home/packages/mortis
+  prune: false
+  suspend: true
+  wait: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
