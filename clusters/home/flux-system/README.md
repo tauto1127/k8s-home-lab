@@ -1,8 +1,8 @@
 # home Flux bootstrap boundary
 
-このdirectoryは、Flux `v2.9.3`を後日installするためのGit入力である。このPRでは`gotk-components.yaml`、public GitRepository、root Kustomizationを追加するが、clusterには適用しない。mergeだけでFluxが動くことはない。
+このdirectoryは、Flux `v2.9.3`のbootstrapとworkload activationに使うGit入力である。bootstrap未適用のclusterでは、このrepositoryのmergeだけでFluxは起動しない。一方、既存Fluxのcontrollerとroot KustomizationがReadyなclusterでは、activation commitのmergeをrootが通常reconcileするため、CLI `flux resume`は使わない。
 
-root Kustomization `flux-system/flux-system`は`./clusters/home`を`prune: false`でreconcileする。`clusters/home/kustomization.yaml`が参照するのは`flux-system/`だけであり、`packages/`を直接renderしない。rootが作成する4つのpackage Kustomizationはすべて`suspend: true`、`prune: false`である。3つのHelmReleaseはGit上で`suspend: true`を維持するが、package停止中のbootstrap段階ではclusterに作成されない。Nextcloudは外側Kustomizationと内側HelmReleaseの両方で`flux.takutk.com/activation-blocked: "true"`を維持する。
+root Kustomization `flux-system/flux-system`は`./clusters/home`を`prune: false`でreconcileする。`clusters/home/kustomization.yaml`が参照するのは`flux-system/`だけであり、`packages/`を直接renderしない。bootstrap直後の初期境界では4つのpackage Kustomizationを`suspend: true`、`prune: false`で作成する。現在のcumulative activation desiredではESO controller、ESO config、CSIが`suspend: false`、Nextcloudだけが`suspend: true`である。CSIの外側はESO configに依存し、内側HelmReleaseは`kube-system`の既存releaseを対象とする。Nextcloudは外側Kustomizationと内側HelmReleaseの両方で`flux.takutk.com/activation-blocked: "true"`を維持する。
 
 ## 固定した生成物
 

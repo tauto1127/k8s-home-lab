@@ -2,8 +2,10 @@
 
 対象は既存の `ClusterSecretStore/secret-store-provider` 1件だけ。
 Git上の接続設定は変更せず、`Kustomization/flux-system/eso-config` を有効にする。
-先行するESO controllerはPR #46で移行済み。CSIとNextcloudのFlux packageは停止を維持する。
-このPRのマージを稼働中のFluxが検知すると、既存storeがFlux管理に入る。
+先行するESO controllerはPR #46で移行済み。このphase完了後にCSIを別の cumulative
+activation commitで有効化し、Nextcloudは停止を維持する。この文書はESO config phaseの
+証跡・rollback境界を記録するもので、CSI activationの詳細は
+`docs/flux-csi-secrets-store-activation-runbook.md`に分離する。
 
 ## 2026-09-07 の読み取り確認
 
@@ -45,7 +47,8 @@ ssh kube 'kubectl get helmrelease -n external-secrets'
 ```
 
 root/eso-config Ready、store Valid、参照する10件のExternalSecret SecretSynced、ESO HelmRelease Readyを確認する。
-CSI/Nextcloudのsuspend=trueとNextcloudのactivation-blocked=trueも確認する。
+Nextcloudのsuspend=trueとactivation-blocked=trueを確認する。CSIの現在のsuspend状態は、
+後続のCSI activation PRのpreflightで確認する。
 Secret値・raw Secret・helm get values/manifestは取得しない。
 
 ## 異常時

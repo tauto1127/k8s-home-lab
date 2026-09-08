@@ -6,8 +6,8 @@
 Fluxが現在そのリソースを所有していることを意味しない。PR #43は停止状態の
 移行準備だった。bootstrapは別途適用済みで、2026-09-07の読み取り確認ではFluxの
 4 controllerとrootが稼働している。PR #46のESO controller移行はReady確認まで完了済み。
-今回のGit desiredではESO controllerとESO configが有効で、CSIとNextcloudは停止中。
-ESO configの実機移行成功はマージ後に個別に確認する。
+今回のGit desiredではESO controller、ESO config、CSIが有効で、Nextcloudは停止中。
+CSIの実機移行成功とchart artifact fingerprintは、専用preflightとマージ後に個別に確認する。
 
 ## 分類
 
@@ -46,7 +46,8 @@ PVC、PV、namespace、CRD、privileged bindingは、初回移行時に
 | `middlewares/cert-manager/helmfile.yaml` | migration-pending | 依存するresourceより先にcontroller releaseを変換する。 |
 | `middlewares/couchdb/*.yaml` | flux-candidate | workload、PVC、ConfigMap、ExternalSecret、package Kustomization。 |
 | `clusters/home/packages/eso-config/clustersecretstore.yaml` | migration-pending | 既存`ClusterSecretStore`のGit owner。今回のdesiredではESO controllerのReadyを依存条件として有効化。specはliveと一致、移行成功はマージ後に確認する。`gcpsm-secret`のdataは取り込まない。 |
-| `middlewares/secrets-store-csi-driver/helmfile.yaml` | migration-pending | CSIの所有境界をESO directoryから分離し、live 1.4.8を移行baselineに固定する。Renovate PR #28の1.6.0は別管理。 |
+| `clusters/home/packages/csi-secrets-store/*.yaml` | migration-pending | live 1.4.8の既存Helm releaseを`kube-system`へ移すFlux package。外側は`eso-config`に依存し、外側Kustomizationと内側HelmReleaseを同一commitで有効化する。公式archive SHA256、CRD集合、stable no-hooks inventoryをpolicyに固定するが、live CRD/schema/ownershipの不一致は停止条件とする。 |
+| `middlewares/secrets-store-csi-driver/helmfile.yaml` | migration-pending | CSIの旧所有境界を参照専用として保持する。live 1.4.8をFlux移行baselineに固定し、Renovate PR #28の1.6.0は別管理。 |
 | `middlewares/grafana/grafana-external-secrets.yaml`, `kustomization.yaml` | flux-candidate | secret materialは外部に保持する。 |
 | `middlewares/grafana/helmfile.yaml` | migration-pending | render結果と比較してから変換する。 |
 | `middlewares/metallb-native/*.yaml` | flux-candidate | vendored controller bundleとaddress configuration。 |
@@ -60,7 +61,7 @@ PVC、PV、namespace、CRD、privileged bindingは、初回移行時に
 | `pv/test-pvc.yaml` | excluded | test PVCは現在もBoundのため、cleanupは別途storageの判断が必要。 |
 | `clusters/home/flux-system/gotk-components.yaml` | bootstrap | Flux `v2.9.3`のCRD/controller/RBAC。生成物とupstream bytesのSHA256をpolicyで検証し、公式bundleの`cluster-admin`付与を含むcluster適用は別承認とする。 |
 | `clusters/home/flux-system/gotk-sync.yaml` | bootstrap | public GitRepositoryとactive root Kustomization。rootは`flux-system/`だけをcomposeし、`packages/`を直接所有しない。 |
-| `clusters/home/flux-system/sync.yaml` | migration-pending | 4つのpackage Kustomization定義。今回のdesiredではESO controller/configが`suspend: false`、CSI/Nextcloudは`suspend: true`、全て`prune: false`。 |
+| `clusters/home/flux-system/sync.yaml` | migration-pending | 4つのpackage Kustomization定義。今回のdesiredではESO controller/config/CSIが`suspend: false`、Nextcloudは`suspend: true`、全て`prune: false`。CSIは`eso-config`に依存する。 |
 | `clusters/home/packages/eso-controller/helmrelease.yaml` | flux-managed | PR #46で移行済み。初回upgrade成功、Ready、chart artifact digest一致を確認済み。 |
 
 すべてのraw `flux-candidate` packageには`kustomization.yaml`がある。Helm chartの
@@ -77,7 +78,7 @@ bindingは意図的にpackageから除外している。
 適用していない。
 
 - ESOのGit定義はPR #43から`clusters/home/packages/eso-controller/helmrelease.yaml`に存在し、PR #46で既存Helm release（chart `external-secrets-0.14.4`）のFlux管理への移行を完了した。2026-09-07の読み取り確認でもHelmReleaseはReadyだった。このPRはcontrollerを再度有効化するものではなく、既存の`ClusterSecretStore`だけをESO config packageでFlux管理へ移す。旧`middlewares/external-secrets-operator/helmfile.yaml`が管理していたのはESO本体ではなくSecrets Store CSI Driverである。
-- Secrets Store CSI Driverは、Gitのdesired chart versionが`1.5.1`、liveが`1.4.8`である。差分を確認してから、どちらを正本にするか決める。
+- Secrets Store CSI Driverは、Git desiredとliveを`secrets-store-csi-driver` 1.4.8へ固定する。公式archive URL/SHA256とstable no-hooks 10 resource inventoryは専用preflightで確認済みだが、live CRD schema/ownership、rendered child、image digestの完全一致は未証明であり、1.6.0へのupgrade（Renovate PR #28）は対象外とする。
 - Nextcloudはlive Helm chart `9.1.3`で、Podが使用中の`33.0.5-apache` image digestに固定した。liveはExternalSecretが生成する`nextcloud-db-secret`を参照しているため、Helmfileも同じSecret名とキーを参照し、chartの既定資格情報Secretをrenderしない。ExternalSecret自体のGit ownerとHelm chartの全valuesが一致したことまでは確認していないため、HelmRelease化は引き続き`migration-pending`とする。
 - Nextcloud valuesは不完全で、既存releaseをupgradeするとchart defaultsへ戻る危険がある。Ingress/PVC/NFS/Service/cron/probes/TLS、既存release adoptionと完全parityが証明されるまで`activation-blocked`で停止し、runbook対象外とする。Secret値を取得せず証明できない場合はvaluesを補完しない。
 - `activation-blocked` annotationはCI markerでありFlux nativeの強制機構ではない。Nextcloudの外側Kustomizationだけを手動resumeするとExternalSecretが先に適用され得るため、CLI resume/手動unsuspendは禁止する。将来activationにはSecret適用phaseの分離またはadmission policyを必須とする。
