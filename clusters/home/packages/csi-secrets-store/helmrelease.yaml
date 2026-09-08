@@ -6,8 +6,10 @@ metadata:
 spec:
   interval: 30m
   timeout: 5m
-  suspend: true
+  suspend: false
   releaseName: csi-secrets-store
+  targetNamespace: kube-system
+  storageNamespace: kube-system
   chart:
     spec:
       chart: secrets-store-csi-driver
@@ -18,11 +20,21 @@ spec:
         namespace: flux-system
       interval: 30m
   install:
+    crds: Skip
+    disableHooks: true
+    disableTakeOwnership: true
     remediation:
       retries: 0
   upgrade:
+    crds: Skip
+    disableHooks: true
+    disableTakeOwnership: true
     remediation:
       retries: 0
       remediateLastFailure: false
+  values:
+    linux:
+      crds:
+        enabled: false
   uninstall:
     keepHistory: true

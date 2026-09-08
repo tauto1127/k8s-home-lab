@@ -45,8 +45,10 @@ spec:
   timeout: 5m
   path: ./clusters/home/packages/csi-secrets-store
   prune: false
-  suspend: true
+  suspend: false
   wait: true
+  dependsOn:
+    - name: eso-config
   sourceRef:
     kind: GitRepository
     name: flux-system

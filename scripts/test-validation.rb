@@ -27,7 +27,7 @@ def build_fixture_schema_archive
   buffer.string
 end
 
-def test_eso_config_validation
+def test_cumulative_activation_validation
   source = File.read(File.join(ROOT, "scripts/validate-flux-ownership.rb"))
   eval(source.split(/^policy_path =/).first, TOPLEVEL_BINDING, "validate-flux-ownership.rb", 1)
   policy = YAML.safe_load(File.read(File.join(ROOT, ".github/manifest-policy.yaml")))
@@ -45,6 +45,29 @@ def test_eso_config_validation
   failures = []
   validate_activation_phase_contract!(previous_activation, failures)
   assert(failures.empty?, "previous eso-controller phase contract was rejected: #{failures.join('; ')}")
+
+  previous_config_activation = {
+    "phase" => "eso-config",
+    "reason" => "previous controller and config activation phase",
+    "activeKustomizations" => Marshal.load(Marshal.dump(ESO_CONFIG_ACTIVATION_CONTRACT.fetch("activeKustomizations"))),
+    "activeHelmReleases" => Marshal.load(Marshal.dump(ESO_CONFIG_ACTIVATION_CONTRACT.fetch("activeHelmReleases")))
+  }
+  failures = []
+  validate_activation_phase_contract!(previous_config_activation, failures)
+  assert(failures.empty?, "previous eso-config phase contract was rejected: #{failures.join('; ')}")
+
+  csi_kustomization = CSI_SECRETS_STORE_ACTIVATION_CONTRACT.fetch("activeKustomizations").find { |entry| entry["name"] == "csi-secrets-store" }
+  csi_release = CSI_SECRETS_STORE_ACTIVATION_CONTRACT.fetch("activeHelmReleases").find { |entry| entry["name"] == "csi-secrets-store" }
+  assert(csi_kustomization.fetch("inventory").map { |entry| entry["name"] } == ["secrets-store-csi-driver", "csi-secrets-store"], "CSI inventory must contain repository and HelmRelease")
+  assert(csi_release.dig("chart", "name") == "secrets-store-csi-driver", "CSI chart name drifted")
+  assert(csi_release.dig("chart", "version") == "1.4.8", "CSI chart version drifted")
+  assert(csi_release.dig("chart", "artifact", "url") == "https://kubernetes-sigs.github.io/secrets-store-csi-driver/charts/secrets-store-csi-driver-1.4.8.tgz", "CSI artifact URL drifted")
+  assert(csi_release.dig("chart", "artifact", "sha256") == "894ee5351f615184af4ad0f4ea03be35485e65bc1797c10e315fcd1bcc3aef13", "CSI artifact digest drifted")
+  assert(csi_release.dig("chart", "artifact", "crdInventory", "count") == 2, "CSI CRD inventory count drifted")
+  assert(csi_release.dig("chart", "artifact", "crdInventory", "setSha256") == "43551fdd7c965bd461dc91d6c08448e0d501e1abd378b2bfb09c24170f79f258", "CSI CRD set digest drifted")
+  assert(csi_release.dig("chart", "artifact", "resourceInventory").length == 10, "CSI stable inventory count drifted")
+  assert(csi_release.dig("safety", "disableHooks") == true, "CSI hook safety gate drifted")
+  assert(csi_release.dig("safety", "linuxCRDsEnabled") == false, "CSI CRD value safety gate drifted")
 
   store = {"spec" => Marshal.load(Marshal.dump(ESO_CONFIG_STORE_SPEC))}
   store_failures = []
@@ -81,6 +104,38 @@ def test_eso_config_validation
   validate_activation_phase_contract!(mutated_activation, failures)
   assert(failures.any? { |failure| failure.include?("ESO config identities must use fluxActivation phase eso-config") }, "ESO config phase bypass was accepted")
 
+  mutated_activation = Marshal.load(Marshal.dump(activation))
+  mutated_activation.fetch("activeKustomizations").find { |entry| entry["name"] == "csi-secrets-store" }["inventory"].pop
+  failures = []
+  validate_activation_phase_contract!(mutated_activation, failures)
+  assert(failures.any? { |failure| failure.include?("activeKustomizations contract") }, "CSI inventory drift was accepted")
+
+  mutated_activation = Marshal.load(Marshal.dump(activation))
+  mutated_activation.fetch("activeHelmReleases").find { |entry| entry["name"] == "csi-secrets-store" }.fetch("chart").fetch("artifact")["sha256"] = "0" * 64
+  failures = []
+  validate_activation_phase_contract!(mutated_activation, failures)
+  assert(failures.any? { |failure| failure.include?("activeHelmReleases contract") }, "CSI artifact drift was accepted")
+
+  mutated_activation = Marshal.load(Marshal.dump(activation))
+  mutated_activation.fetch("activeHelmReleases").find { |entry| entry["name"] == "csi-secrets-store" }.fetch("chart").fetch("artifact").fetch("crdInventory")["setSha256"] = "0" * 64
+  failures = []
+  validate_activation_phase_contract!(mutated_activation, failures)
+  assert(failures.any? { |failure| failure.include?("activeHelmReleases contract") }, "CSI CRD set checksum drift was accepted")
+
+  fixture_files = safe_archive_files(FIXTURE_CHART_ASSET, "fixture chart")
+  fixture_crd_paths = fixture_files.keys.select { |path| path.start_with?("external-secrets/templates/crds/") }
+  mutated_fixture_files = fixture_files.merge(fixture_crd_paths.fetch(0) => fixture_files.fetch(fixture_crd_paths.fetch(0)) + "mutation")
+  assert(
+    archive_file_set_sha256(mutated_fixture_files, fixture_crd_paths) != FIXTURE_CHART_CRD_SET_SHA,
+    "CSI-style CRD inventory checksum accepted mutated CRD bytes"
+  )
+
+  mutated_activation = Marshal.load(Marshal.dump(activation))
+  mutated_activation.fetch("activeHelmReleases").find { |entry| entry["name"] == "csi-secrets-store" }.fetch("safety")["disableHooks"] = false
+  failures = []
+  validate_activation_phase_contract!(mutated_activation, failures)
+  assert(failures.any? { |failure| failure.include?("activeHelmReleases contract") }, "CSI hook safety drift was accepted")
+
   config_failures = []
   validate_eso_config_kustomization!({"spec" => {"wait" => true, "dependsOn" => [{"name" => "eso-controller"}]}}, config_failures)
   assert(config_failures.empty?, "reviewed ESO dependency contract was rejected")
@@ -88,6 +143,13 @@ def test_eso_config_validation
   validate_eso_config_kustomization!({"spec" => {"wait" => false, "dependsOn" => [{"name" => "other"}]}}, config_failures)
   assert(config_failures.any? { |failure| failure.include?("wait must be true") }, "wait:false was accepted")
   assert(config_failures.any? { |failure| failure.include?("dependsOn must exactly") }, "dependency drift was accepted")
+
+  csi_failures = []
+  validate_csi_secrets_store_kustomization!({"spec" => {"wait" => true, "dependsOn" => [{"name" => "eso-config"}]}}, csi_failures)
+  assert(csi_failures.empty?, "reviewed CSI dependency contract was rejected")
+  csi_failures = []
+  validate_csi_secrets_store_kustomization!({"spec" => {"wait" => true, "dependsOn" => [{"name" => "eso-controller"}]}}, csi_failures)
+  assert(csi_failures.any? { |failure| failure.include?("dependsOn must exactly") }, "CSI dependency bypass was accepted")
 end
 
 def build_fixture_chart_archive
@@ -136,6 +198,7 @@ FAKE_KUBECTL_DIR = Dir.mktmpdir("flux-ownership-kubectl")
 FAKE_KUBECTL = File.join(FAKE_KUBECTL_DIR, "kubectl")
 FAKE_CURL = File.join(FAKE_KUBECTL_DIR, "curl")
 FAKE_FLUX = File.join(FAKE_KUBECTL_DIR, "flux")
+FAKE_HELM = File.join(FAKE_KUBECTL_DIR, "helm")
 FIXTURE_INSTALL_ASSET = "fixture Flux install asset v2.9.3\n"
 FIXTURE_SCHEMA_ASSET = build_fixture_schema_archive
 FIXTURE_CHART_ASSET = build_fixture_chart_archive
@@ -197,13 +260,62 @@ File.write(FAKE_FLUX, <<~'SH')
   cat .flux-test/generated-components.yaml
 SH
 FileUtils.chmod(0o755, FAKE_FLUX)
+File.write(FAKE_HELM, <<~'SH')
+  #!/usr/bin/env bash
+  set -euo pipefail
+  test "${1:-}" = template
+  test -n "${2:-}"
+  test -n "${3:-}" && test -f "$3"
+  test "${4:-}" = --namespace
+  test -n "${5:-}"
+  test "${6:-}" = --include-crds
+  test "${7:-}" = --no-hooks
+  test "${8:-}" = --set
+  test "${9:-}" = linux.crds.enabled=false
+  test "$#" -eq 9
+  case "${FAKE_HELM_MODE:-ok}" in
+    nonzero) exit 42 ;;
+    empty) exit 0 ;;
+    duplicate)
+      cat <<'YAML'
+  apiVersion: example.invalid/v1
+  kind: FixtureCRD
+  metadata:
+    name: fixture-crd
+  ---
+  apiVersion: example.invalid/v1
+  kind: FixtureCRD
+  metadata:
+    name: fixture-crd
+  YAML
+      ;;
+    drift)
+      cat <<'YAML'
+  apiVersion: example.invalid/v1
+  kind: FixtureCRD
+  metadata:
+    name: drifted
+  YAML
+      ;;
+    *)
+      cat <<'YAML'
+  apiVersion: example.invalid/v1
+  kind: FixtureCRD
+  metadata:
+    name: fixture-crd
+  YAML
+      ;;
+  esac
+SH
+FileUtils.chmod(0o755, FAKE_HELM)
 
 def run_command(*command, env: {})
   validator = command.any? { |part| part.to_s.end_with?("validate-flux-ownership.rb") }
   inherited = validator ? {
     "FLUX_OWNERSHIP_KUBECTL" => FAKE_KUBECTL,
     "FLUX_OWNERSHIP_CURL" => FAKE_CURL,
-    "FLUX_OWNERSHIP_FLUX" => FAKE_FLUX
+    "FLUX_OWNERSHIP_FLUX" => FAKE_FLUX,
+    "FLUX_OWNERSHIP_HELM" => FAKE_HELM
   } : {}
   Open3.capture3(inherited.merge(env), *command, chdir: ROOT)
 end
@@ -970,6 +1082,15 @@ Dir.mktmpdir("flux-activation-policy-test") do |temporary_root|
                 pathPrefix: external-secrets/templates/crds/
                 count: 1
                 sha256: #{FIXTURE_CHART_CRD_SET_SHA}
+              crdInventory:
+                pathPrefix: external-secrets/templates/crds/
+                count: 1
+                setSha256: #{FIXTURE_CHART_CRD_SET_SHA}
+              resourceInventory:
+                - apiVersion: example.invalid/v1
+                  kind: FixtureCRD
+                  namespace: ""
+                  name: fixture-crd
           safety:
             installCRDs: true
   YAML
@@ -981,6 +1102,20 @@ Dir.mktmpdir("flux-activation-policy-test") do |temporary_root|
   File.write(flux_path, inactive_flux.sub("suspend: true", "suspend: false"))
   File.write(release_path, inactive_release.sub("suspend: true", "suspend: false"))
   assert_success("ruby", validator, temporary_root)
+
+  stdout, stderr = assert_failure("ruby", validator, temporary_root, env: {"FAKE_HELM_MODE" => "drift"})
+  assert((stdout + stderr).include?("rendered resource inventory mismatch"), "Helm chart resource inventory drift was accepted")
+  stdout, stderr = assert_failure("ruby", validator, temporary_root, env: {"FAKE_HELM_MODE" => "nonzero"})
+  assert((stdout + stderr).include?("pinned Helm renderer failed"), "non-zero Helm renderer was accepted")
+  stdout, stderr = assert_failure("ruby", validator, temporary_root, env: {"FAKE_HELM_MODE" => "empty"})
+  assert((stdout + stderr).include?("pinned Helm render was empty"), "empty Helm render was accepted")
+  stdout, stderr = assert_failure("ruby", validator, temporary_root, env: {"FAKE_HELM_MODE" => "duplicate"})
+  assert((stdout + stderr).include?("duplicate identities"), "duplicate rendered resource identities were accepted")
+  stdout, stderr = assert_failure(
+    "ruby", validator, temporary_root,
+    env: {"FLUX_OWNERSHIP_HELM" => File.join(temporary_root, "missing-helm")}
+  )
+  assert((stdout + stderr).include?("pinned Helm renderer is unavailable"), "unavailable Helm renderer was accepted")
 
   unknown_phase_document = YAML.safe_load(activation_policy, permitted_classes: [], permitted_symbols: [], aliases: false)
   unknown_phase_document["fluxActivation"]["phase"] = "unexpected-phase"
@@ -1528,5 +1663,5 @@ Dir.mktmpdir("flux-bootstrap-validation-test") do |temporary_root|
   assert((stdout + stderr).include?("Kustomize renderer is unavailable"), "unavailable bootstrap renderer was accepted")
 end
 
-test_eso_config_validation
+test_cumulative_activation_validation
 puts "Validation fixtures passed."

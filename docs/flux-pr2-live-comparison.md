@@ -48,6 +48,22 @@ PR #36にはこれらの候補定義があるが、PR2では取り込まず、�
   live 1.4.8をこの移行baselineに固定し、Renovate PR #28 (1.6.0)は対象外とした。
   `middlewares/secrets-store-csi-driver/helmfile.yaml`とNextcloudの旧Helmfileは、比較・移行検討用の
   legacy reference-only定義であり、PR2のFlux Kustomizationからは参照されず、active Flux ownerではない。
+
+## 2026-09-08 CSI activation preflight追記
+
+Secrets Store CSI Driver 1.4.8の公式chart archiveは、次のURLとSHA256で固定した。
+
+- URL: `https://kubernetes-sigs.github.io/secrets-store-csi-driver/charts/secrets-store-csi-driver-1.4.8.tgz`
+- SHA256: `894ee5351f615184af4ad0f4ea03be35485e65bc1797c10e315fcd1bcc3aef13`
+- `crds/` 2件の集合SHA256: `43551fdd7c965bd461dc91d6c08448e0d501e1abd378b2bfb09c24170f79f258`
+  （archive path昇順の `path + NUL + file bytes + NUL` 連結をSHA256化）
+
+`linux.crds.enabled=false` のstable renderはCRD 2件、ServiceAccount 1件、ClusterRole 4件、
+ClusterRoleBinding 1件、DaemonSet 1件、CSIDriver 1件の10 resourceで、default renderの
+8 transient CRD hook objectを除いた集合と一致した。server diffはemptyだった。既存CRDの
+名前・schema・ownerが選択フィールドで一致しない場合は停止し、CRD修復やupgradeを別承認に分ける。
+live DaemonSetは2/2 Readyだが、node image IDの差とworker側のrestart履歴（controller側1回に対し
+worker側約30回）は残存リスクとしてactivation後も観測する。
 - Nextcloud live DeploymentはHelm labels/chart labelと1 replica。GitにはHelmReleaseを
   定義するが、PR #36の全values、init container、NFS、service annotations、TLS Secret、
   liveness/readiness、cron等の完全parityはこの比較だけでは証明できない。そのため

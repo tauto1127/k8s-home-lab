@@ -7,6 +7,7 @@ require "set"
 require "digest"
 require "rubygems/package"
 require "stringio"
+require "tmpdir"
 require "yaml"
 require "zlib"
 
@@ -26,6 +27,7 @@ BLOCKED_ACTIVATION_OBJECTS = Set.new([
 KUBECTL = ENV.fetch("FLUX_OWNERSHIP_KUBECTL", "kubectl")
 CURL = ENV.fetch("FLUX_OWNERSHIP_CURL", "curl")
 FLUX = ENV.fetch("FLUX_OWNERSHIP_FLUX", "flux")
+HELM = ENV.fetch("FLUX_OWNERSHIP_HELM", "helm")
 KUSTOMIZATION_FILENAMES = %w[kustomization.yaml kustomization.yml Kustomization].freeze
 EXPECTED_BOOTSTRAP_SOURCE = {
   "apiVersion" => "source.toolkit.fluxcd.io/v1",
@@ -122,6 +124,129 @@ ESO_CONFIG_ACTIVATION_CONTRACT = {
   "activeHelmReleases" => ESO_CONTROLLER_ACTIVATION_CONTRACT["activeHelmReleases"]
 }.freeze
 
+CSI_SECRETS_STORE_KUSTOMIZATION = {
+  "apiVersion" => "kustomize.toolkit.fluxcd.io/v1",
+  "kind" => "Kustomization",
+  "namespace" => "flux-system",
+  "name" => "csi-secrets-store",
+  "path" => "./clusters/home/packages/csi-secrets-store",
+  "inventory" => [
+    {
+      "apiVersion" => "source.toolkit.fluxcd.io/v1",
+      "kind" => "HelmRepository",
+      "namespace" => "flux-system",
+      "name" => "secrets-store-csi-driver"
+    },
+    {
+      "apiVersion" => "helm.toolkit.fluxcd.io/v2",
+      "kind" => "HelmRelease",
+      "namespace" => "kube-system",
+      "name" => "csi-secrets-store"
+    }
+  ]
+}.freeze
+CSI_SECRETS_STORE_STABLE_INVENTORY = [
+  {
+    "apiVersion" => "apiextensions.k8s.io/v1",
+    "kind" => "CustomResourceDefinition",
+    "namespace" => "",
+    "name" => "secretproviderclasses.secrets-store.csi.x-k8s.io"
+  },
+  {
+    "apiVersion" => "apiextensions.k8s.io/v1",
+    "kind" => "CustomResourceDefinition",
+    "namespace" => "",
+    "name" => "secretproviderclasspodstatuses.secrets-store.csi.x-k8s.io"
+  },
+  {
+    "apiVersion" => "v1",
+    "kind" => "ServiceAccount",
+    "namespace" => "kube-system",
+    "name" => "secrets-store-csi-driver"
+  },
+  {
+    "apiVersion" => "rbac.authorization.k8s.io/v1",
+    "kind" => "ClusterRole",
+    "namespace" => "",
+    "name" => "secretproviderclasses-admin-role"
+  },
+  {
+    "apiVersion" => "rbac.authorization.k8s.io/v1",
+    "kind" => "ClusterRole",
+    "namespace" => "",
+    "name" => "secretproviderclasses-viewer-role"
+  },
+  {
+    "apiVersion" => "rbac.authorization.k8s.io/v1",
+    "kind" => "ClusterRole",
+    "namespace" => "",
+    "name" => "secretproviderclasspodstatuses-viewer-role"
+  },
+  {
+    "apiVersion" => "rbac.authorization.k8s.io/v1",
+    "kind" => "ClusterRole",
+    "namespace" => "",
+    "name" => "secretproviderclasses-role"
+  },
+  {
+    "apiVersion" => "rbac.authorization.k8s.io/v1",
+    "kind" => "ClusterRoleBinding",
+    "namespace" => "",
+    "name" => "secretproviderclasses-rolebinding"
+  },
+  {
+    "apiVersion" => "apps/v1",
+    "kind" => "DaemonSet",
+    "namespace" => "kube-system",
+    "name" => "csi-secrets-store-secrets-store-csi-driver"
+  },
+  {
+    "apiVersion" => "storage.k8s.io/v1",
+    "kind" => "CSIDriver",
+    "namespace" => "",
+    "name" => "secrets-store.csi.k8s.io"
+  }
+].freeze
+CSI_SECRETS_STORE_ARTIFACT = {
+  "url" => "https://kubernetes-sigs.github.io/secrets-store-csi-driver/charts/secrets-store-csi-driver-1.4.8.tgz",
+  "sha256" => "894ee5351f615184af4ad0f4ea03be35485e65bc1797c10e315fcd1bcc3aef13",
+  "crdInventory" => {
+    "pathPrefix" => "secrets-store-csi-driver/crds/",
+    "count" => 2,
+    "setSha256" => "43551fdd7c965bd461dc91d6c08448e0d501e1abd378b2bfb09c24170f79f258"
+  },
+  "resourceInventory" => CSI_SECRETS_STORE_STABLE_INVENTORY
+}.freeze
+CSI_SECRETS_STORE_HELM_RELEASE = {
+  "apiVersion" => "helm.toolkit.fluxcd.io/v2",
+  "kind" => "HelmRelease",
+  "namespace" => "kube-system",
+  "name" => "csi-secrets-store",
+  "owner" => {
+    "apiVersion" => "kustomize.toolkit.fluxcd.io/v1",
+    "kind" => "Kustomization",
+    "namespace" => "flux-system",
+    "name" => "csi-secrets-store"
+  },
+  "chart" => {
+    "name" => "secrets-store-csi-driver",
+    "version" => "1.4.8",
+    "repository" => {
+      "apiVersion" => "source.toolkit.fluxcd.io/v1",
+      "kind" => "HelmRepository",
+      "namespace" => "flux-system",
+      "name" => "secrets-store-csi-driver",
+      "url" => "https://kubernetes-sigs.github.io/secrets-store-csi-driver/charts"
+    },
+    "artifact" => CSI_SECRETS_STORE_ARTIFACT
+  },
+  "safety" => {"disableHooks" => true, "linuxCRDsEnabled" => false}
+}.freeze
+CSI_SECRETS_STORE_ACTIVATION_CONTRACT = {
+  "activeKustomizations" => ESO_CONFIG_ACTIVATION_CONTRACT["activeKustomizations"] + [CSI_SECRETS_STORE_KUSTOMIZATION],
+  "activeHelmReleases" => ESO_CONFIG_ACTIVATION_CONTRACT["activeHelmReleases"] + [CSI_SECRETS_STORE_HELM_RELEASE]
+}.freeze
+
 ESO_CONFIG_STORE_IDENTITY = "external-secrets.io/v1beta1/ClusterSecretStore//secret-store-provider"
 ESO_CONFIG_STORE_POLICY = {
   "apiVersion" => "external-secrets.io/v1beta1",
@@ -186,7 +311,18 @@ TEST_FIXTURE_ACTIVATION_CONTRACT = {
           "pathPrefix" => "external-secrets/templates/crds/",
           "count" => 1,
           "sha256" => "336717a1613029971faf17d3accd4ac7eb549dcd2de227da8211794d9c7ac654"
-        }
+        },
+        "crdInventory" => {
+          "pathPrefix" => "external-secrets/templates/crds/",
+          "count" => 1,
+          "setSha256" => "336717a1613029971faf17d3accd4ac7eb549dcd2de227da8211794d9c7ac654"
+        },
+        "resourceInventory" => [{
+          "apiVersion" => "example.invalid/v1",
+          "kind" => "FixtureCRD",
+          "namespace" => "",
+          "name" => "fixture-crd"
+        }]
       }
     },
     "safety" => {"installCRDs" => true}
@@ -195,6 +331,7 @@ TEST_FIXTURE_ACTIVATION_CONTRACT = {
 ACTIVATION_PHASE_CONTRACTS = {
   "eso-controller" => ESO_CONTROLLER_ACTIVATION_CONTRACT,
   "eso-config" => ESO_CONFIG_ACTIVATION_CONTRACT,
+  "csi-secrets-store" => CSI_SECRETS_STORE_ACTIVATION_CONTRACT,
   # This reserved phase is usable only by the offline fake transport in test-validation.rb.
   # Its .invalid artifact URL makes it fail closed under the real CI transport.
   "test-fixture-helm-adoption" => TEST_FIXTURE_ACTIVATION_CONTRACT
@@ -304,6 +441,45 @@ def archive_file_set_sha256(files, paths)
   digest.hexdigest
 end
 
+def validate_chart_resource_inventory!(bytes, identity, namespace, resource_inventory, failures)
+  release_name = identity.split("/").last
+  expected_ids = resource_inventory.map do |resource|
+    inventory_policy_identity(resource, "active HelmRelease #{identity} chart.artifact.resourceInventory entry")
+  end.to_set
+
+  Dir.mktmpdir("flux-ownership-helm-") do |directory|
+    chart_path = File.join(directory, "chart.tgz")
+    File.binwrite(chart_path, bytes)
+    stdout, _stderr, status = Open3.capture3(
+      HELM,
+      "template",
+      release_name,
+      chart_path,
+      "--namespace", namespace.to_s,
+      "--include-crds",
+      "--no-hooks",
+      "--set", "linux.crds.enabled=false"
+    )
+    raise "active HelmRelease #{identity}: pinned Helm renderer failed" unless status.success?
+    raise "active HelmRelease #{identity}: pinned Helm render was empty" if stdout.strip.empty?
+
+    rendered_ids = yaml_documents(stdout, "rendered Helm chart #{identity}")
+      .flat_map { |document| resource_documents(document) }
+      .map { |document| required_identity(document, "rendered Helm chart #{identity}") }
+    duplicate_ids = rendered_ids.group_by(&:itself).select { |_resource_id, occurrences| occurrences.length > 1 }.keys.sort
+    raise "active HelmRelease #{identity}: rendered resource inventory contains duplicate identities: #{duplicate_ids.join(', ')}" unless duplicate_ids.empty?
+
+    actual_ids = rendered_ids.to_set
+    unless actual_ids == expected_ids
+      failures << "active HelmRelease #{identity}: rendered resource inventory mismatch: " \
+                  "expected #{expected_ids.to_a.sort.join(', ')}; " \
+                  "found #{actual_ids.to_a.sort.join(', ')}"
+    end
+  end
+rescue Errno::ENOENT
+  raise "active HelmRelease #{identity}: pinned Helm renderer is unavailable (#{HELM})"
+end
+
 def resource_documents(document)
   return [] unless document.is_a?(Hash)
   return [document] unless document["kind"] == "List" && document["items"].is_a?(Array)
@@ -405,6 +581,8 @@ def validate_activation_phase_contract!(activation, failures)
   expected_kustomization = ESO_CONTROLLER_ACTIVATION_CONTRACT.fetch("activeKustomizations").first
   expected_helm_release = ESO_CONTROLLER_ACTIVATION_CONTRACT.fetch("activeHelmReleases").first
   expected_config_kustomization = ESO_CONFIG_ACTIVATION_CONTRACT.fetch("activeKustomizations").find { |entry| entry["name"] == "eso-config" }
+  expected_csi_kustomization = CSI_SECRETS_STORE_KUSTOMIZATION
+  expected_csi_helm_release = CSI_SECRETS_STORE_HELM_RELEASE
   known_identity_present = Array(activation["activeKustomizations"]).any? do |entry|
     entry.is_a?(Hash) && %w[apiVersion kind namespace name].all? { |field| entry[field] == expected_kustomization[field] }
   end
@@ -414,11 +592,20 @@ def validate_activation_phase_contract!(activation, failures)
   known_config_identity_present = Array(activation["activeKustomizations"]).any? do |entry|
     entry.is_a?(Hash) && %w[apiVersion kind namespace name].all? { |field| entry[field] == expected_config_kustomization[field] }
   end
-  if known_identity_present && !["eso-controller", "eso-config"].include?(phase)
-    failures << "Flux ESO controller identities must use fluxActivation phase eso-controller"
+  if known_identity_present && !["eso-controller", "eso-config", "csi-secrets-store"].include?(phase)
+    failures << "Flux ESO controller identities must use fluxActivation phase eso-controller, eso-config, or csi-secrets-store"
   end
-  if known_config_identity_present && phase != "eso-config"
-    failures << "Flux ESO config identities must use fluxActivation phase eso-config"
+  if known_config_identity_present && !["eso-config", "csi-secrets-store"].include?(phase)
+    failures << "Flux ESO config identities must use fluxActivation phase eso-config or csi-secrets-store"
+  end
+  known_csi_identity_present = Array(activation["activeKustomizations"]).any? do |entry|
+    entry.is_a?(Hash) && %w[apiVersion kind namespace name].all? { |field| entry[field] == expected_csi_kustomization[field] }
+  end
+  known_csi_identity_present ||= Array(activation["activeHelmReleases"]).any? do |entry|
+    entry.is_a?(Hash) && %w[apiVersion kind namespace name].all? { |field| entry[field] == expected_csi_helm_release[field] }
+  end
+  if known_csi_identity_present && phase != "csi-secrets-store"
+    failures << "Flux CSI identities must use fluxActivation phase csi-secrets-store"
   end
 
   expected_contract = ACTIVATION_PHASE_CONTRACTS[phase]
@@ -445,6 +632,14 @@ def validate_eso_config_kustomization!(document, failures)
   failures << "active Kustomization eso-config: wait must be true" unless spec["wait"] == true
   unless spec["dependsOn"] == [{"name" => "eso-controller"}]
     failures << "active Kustomization eso-config: dependsOn must exactly be [{name: eso-controller}]"
+  end
+end
+
+def validate_csi_secrets_store_kustomization!(document, failures)
+  spec = document.fetch("spec", {})
+  failures << "active Kustomization csi-secrets-store: wait must be true" unless spec["wait"] == true
+  unless spec["dependsOn"] == [{"name" => "eso-config"}]
+    failures << "active Kustomization csi-secrets-store: dependsOn must exactly be [{name: eso-config}]"
   end
 end
 
@@ -497,6 +692,32 @@ def validate_activation_chart_policy!(policy, identity, failures, artifact_cache
       end
     end
 
+    crd_inventory = artifact["crdInventory"]
+    if crd_inventory
+      raise "active HelmRelease #{identity}: chart.artifact.crdInventory must be a mapping" unless crd_inventory.is_a?(Hash)
+      prefix = crd_inventory["pathPrefix"].to_s
+      prefix_path = Pathname.new(prefix)
+      prefix_valid = prefix.end_with?("/") && !prefix_path.absolute? && !prefix_path.each_filename.include?("..")
+      failures << "active HelmRelease #{identity}: CRD inventory pathPrefix must be a safe archive prefix" unless prefix_valid
+      expected_count = crd_inventory["count"]
+      failures << "active HelmRelease #{identity}: CRD inventory count must be a positive integer" unless expected_count.is_a?(Integer) && expected_count.positive?
+      unless crd_inventory["setSha256"].to_s.match?(/\A[0-9a-f]{64}\z/)
+        failures << "active HelmRelease #{identity}: CRD inventory setSha256 must be an exact lowercase SHA256"
+      end
+    end
+
+    resource_inventory = artifact["resourceInventory"]
+    if resource_inventory
+      unless resource_inventory.is_a?(Array) && !resource_inventory.empty?
+        raise "active HelmRelease #{identity}: chart.artifact.resourceInventory must be a non-empty array"
+      end
+      inventory_ids = Set.new
+      resource_inventory.each do |resource|
+        resource_id = inventory_policy_identity(resource, "active HelmRelease #{identity} chart.artifact.resourceInventory entry")
+        failures << "active HelmRelease #{identity}: duplicate chart artifact inventory entry #{resource_id}" unless inventory_ids.add?(resource_id)
+      end
+    end
+
     if artifact_url_valid && artifact_sha.match?(/\A[0-9a-f]{64}\z/)
       bytes = artifact_cache.fetch([artifact_url, artifact_sha]) do
         artifact_cache[[artifact_url, artifact_sha]] = verify_remote_sha256!(
@@ -519,6 +740,22 @@ def validate_activation_chart_policy!(policy, identity, failures, artifact_cache
           failures << "active HelmRelease #{identity}: CRD template inventory checksum mismatch"
         end
       end
+      if bytes && crd_inventory
+        files = safe_archive_files(bytes, "active HelmRelease #{identity} chart artifact")
+        prefix = crd_inventory["pathPrefix"].to_s
+        paths = files.keys.select { |path| path.start_with?(prefix) }
+        expected_count = crd_inventory["count"]
+        unless paths.length == expected_count
+          failures << "active HelmRelease #{identity}: CRD inventory count mismatch: expected #{expected_count}; found #{paths.length}"
+        end
+        actual_crd_sha = archive_file_set_sha256(files, paths)
+        unless actual_crd_sha == crd_inventory["setSha256"]
+          failures << "active HelmRelease #{identity}: CRD inventory set checksum mismatch"
+        end
+      end
+      if bytes && resource_inventory
+        validate_chart_resource_inventory!(bytes, identity, policy["namespace"], resource_inventory, failures)
+      end
     end
     artifact_contract = artifact
   end
@@ -527,6 +764,12 @@ def validate_activation_chart_policy!(policy, identity, failures, artifact_cache
   raise "active HelmRelease #{identity}: safety policy must be a mapping" unless safety.is_a?(Hash)
   if safety.key?("installCRDs") && ![true, false].include?(safety["installCRDs"])
     failures << "active HelmRelease #{identity}: safety.installCRDs must be a boolean"
+  end
+  if safety.key?("linuxCRDsEnabled") && ![true, false].include?(safety["linuxCRDsEnabled"])
+    failures << "active HelmRelease #{identity}: safety.linuxCRDsEnabled must be a boolean"
+  end
+  if safety.key?("disableHooks") && ![true, false].include?(safety["disableHooks"])
+    failures << "active HelmRelease #{identity}: safety.disableHooks must be a boolean"
   end
 
   owner_policy = policy.fetch("owner")
@@ -538,7 +781,9 @@ def validate_activation_chart_policy!(policy, identity, failures, artifact_cache
     "repositoryUrl" => repository_url,
     "ownerIdentity" => namespaced_identity("Kustomization", owner_policy["namespace"], owner_policy["name"]),
     "artifact" => artifact_contract,
-    "installCRDs" => safety["installCRDs"]
+    "installCRDs" => safety["installCRDs"],
+    "disableHooks" => safety["disableHooks"],
+    "linuxCRDsEnabled" => safety["linuxCRDsEnabled"]
   }
 end
 
@@ -564,6 +809,9 @@ def validate_active_helm_release_safety(document, identity, contract, failures)
       next
     end
     failures << "active HelmRelease #{identity}: #{action}.crds must be Skip" unless action_spec["crds"] == "Skip"
+    if contract["disableHooks"] == true && action_spec["disableHooks"] != true
+      failures << "active HelmRelease #{identity}: #{action}.disableHooks must be true"
+    end
     unless action_spec["disableTakeOwnership"] == true
       failures << "active HelmRelease #{identity}: #{action}.disableTakeOwnership must be true"
     end
@@ -572,6 +820,12 @@ def validate_active_helm_release_safety(document, identity, contract, failures)
     expected = contract["installCRDs"]
     unless spec.dig("values", "installCRDs") == expected
       failures << "active HelmRelease #{identity}: spec.values.installCRDs must be #{expected.inspect}"
+    end
+  end
+  unless contract["linuxCRDsEnabled"].nil?
+    expected = contract["linuxCRDsEnabled"]
+    unless spec.dig("values", "linux", "crds", "enabled") == expected
+      failures << "active HelmRelease #{identity}: spec.values.linux.crds.enabled must be #{expected.inspect}"
     end
   end
 end
@@ -919,6 +1173,9 @@ flux_entries.each do |source_path, resource|
     failures << "active Kustomization path must be #{expected_path}: #{flux_id}" unless spec["path"] == expected_path
     if activation && activation["phase"] == "eso-config" && name == "eso-config" && namespace == "flux-system"
       validate_eso_config_kustomization!(resource, failures)
+    end
+    if activation && activation["phase"] == "csi-secrets-store" && name == "csi-secrets-store" && namespace == "flux-system"
+      validate_csi_secrets_store_kustomization!(resource, failures)
     end
   else
     failures << "Flux Kustomization #{name}: prune must be false" unless spec["prune"] == false
