@@ -1684,7 +1684,8 @@ def test_mortis_preparation_contract
   package_kustomization = YAML.safe_load(File.read(File.join(package_root, "kustomization.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
   assert(package_kustomization["resources"] == ["mortis.yaml"], "Mortis package composition drifted")
 
-  resources = File.read(File.join(package_root, "mortis.yaml")).split(/^---[ \t]*(?:#.*)?$\n?/).filter_map do |document|
+  rendered, = assert_success("kubectl", "kustomize", package_root)
+  resources = rendered.split(/^---[ \t]*(?:#.*)?$\n?/).filter_map do |document|
     next if document.strip.empty?
     YAML.safe_load(document, permitted_classes: [], permitted_symbols: [], aliases: false)
   end
