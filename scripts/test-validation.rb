@@ -991,6 +991,28 @@ Dir.mktmpdir("flux-reference-validation-test") do |temporary_root|
   File.write(File.join(temporary_root, "clusters/pkg/release.yaml"), File.read(File.join(temporary_root, "clusters/pkg/release.yaml")).sub("name: charts", "name: missing"))
   stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
   assert((stdout + stderr).include?("HelmRepository sourceRef is missing or mismatched"), "missing HelmRepository was accepted")
+
+  File.write(File.join(temporary_root, "clusters/pkg/kustomization.yaml"), "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: [repo.yaml, release.yaml]\n")
+  File.write(File.join(temporary_root, "clusters/pkg/repo.yaml"), "apiVersion: source.toolkit.fluxcd.io/v1\nkind: GitRepository\nmetadata:\n  name: flux-system\n  namespace: flux-system\nspec:\n  interval: 1m\n  url: https://github.com/tauto1127/k8s-home-lab\n  ref:\n    branch: main\n")
+  File.write(File.join(temporary_root, "clusters/pkg/release.yaml"), "apiVersion: helm.toolkit.fluxcd.io/v2\nkind: HelmRelease\nmetadata:\n  name: app\n  namespace: default\nspec:\n  suspend: true\n  chart:\n    spec:\n      chart: ./apps/memos/chart\n      sourceRef:\n        kind: GitRepository\n        name: flux-system\n        namespace: flux-system\n")
+  File.write(flux_path, valid)
+  assert_success("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+
+  File.write(File.join(temporary_root, "clusters/pkg/kustomization.yaml"), "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: [release.yaml]\n")
+  FileUtils.rm_f(File.join(temporary_root, "clusters/pkg/repo.yaml"))
+  stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+  assert((stdout + stderr).include?("GitRepository sourceRef is missing or mismatched"), "undeclared GitRepository chart source was accepted")
+
+  File.write(File.join(temporary_root, "clusters/pkg/kustomization.yaml"), "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: [repo.yaml, release.yaml]\n")
+  File.write(File.join(temporary_root, "clusters/pkg/release.yaml"), "apiVersion: helm.toolkit.fluxcd.io/v2\nkind: HelmRelease\nmetadata:\n  name: app\n  namespace: default\nspec:\n  suspend: true\n  chart:\n    spec:\n      chart: ./apps/memos/chart\n      sourceRef:\n        kind: GitRepository\n        name: flux-system\n        namespace: flux-system\n")
+  File.write(File.join(temporary_root, "clusters/pkg/release.yaml"), File.read(File.join(temporary_root, "clusters/pkg/release.yaml")).sub("chart: ./apps/memos/chart", "chart: apps/memos/chart"))
+  stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+  assert((stdout + stderr).include?("GitRepository chart path must be repository-relative"), "relative Git chart path without ./ was accepted")
+
+  File.write(File.join(temporary_root, "clusters/pkg/repo.yaml"), "apiVersion: source.toolkit.fluxcd.io/v1\nkind: GitRepository\nmetadata:\n  name: other\n  namespace: flux-system\nspec:\n  interval: 1m\n  url: https://github.com/tauto1127/k8s-home-lab\n  ref:\n    branch: main\n")
+  File.write(File.join(temporary_root, "clusters/pkg/release.yaml"), "apiVersion: helm.toolkit.fluxcd.io/v2\nkind: HelmRelease\nmetadata:\n  name: app\n  namespace: default\nspec:\n  suspend: true\n  chart:\n    spec:\n      chart: ./apps/memos/chart\n      sourceRef:\n        kind: GitRepository\n        name: other\n        namespace: flux-system\n")
+  stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+  assert((stdout + stderr).include?("GitRepository sourceRef must be the bootstrap flux-system source"), "non-bootstrap GitRepository chart source was accepted")
 end
 
 Dir.mktmpdir("flux-activation-policy-test") do |temporary_root|
@@ -1935,7 +1957,48 @@ def test_mortis_preparation_contract
   assert(mortis.dig("spec", "prune") == false, "Mortis preparation must keep prune:false")
 end
 
+def test_memos_preparation_contract
+  package_root = File.join(ROOT, "clusters/home/packages/memos")
+  package_kustomization = YAML.safe_load(File.read(File.join(package_root, "kustomization.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
+  assert(package_kustomization["resources"] == ["namespace.yaml", "helmrelease.yaml"], "Memos package composition drifted")
+
+  helm = YAML.safe_load(File.read(File.join(package_root, "helmrelease.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
+  assert(helm.dig("spec", "suspend") == true, "Memos HelmRelease must remain suspended")
+  assert(helm.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "Memos HelmRelease must stay activation-blocked")
+  assert(helm.dig("spec", "chart", "spec", "chart") == "./apps/memos/chart", "Memos chart path drifted")
+  assert(helm.dig("spec", "chart", "spec", "sourceRef") == {
+    "kind" => "GitRepository",
+    "name" => "flux-system",
+    "namespace" => "flux-system"
+  }, "Memos chart sourceRef drifted")
+  assert(helm.dig("spec", "values", "image", "tag") == "0.29.0", "Memos image tag drifted")
+  assert(helm.dig("spec", "values", "service", "type") == "LoadBalancer", "Memos service type drifted")
+  assert(helm.dig("spec", "values", "service", "annotations", "metallb.io/loadBalancerIPs") == "192.168.11.209", "Memos MetalLB IP drifted")
+  assert(helm.dig("spec", "values", "persistence", "enabled") == true, "Memos persistence drifted")
+  assert(helm.dig("spec", "install", "disableTakeOwnership") == true, "Memos adopt flag drifted")
+
+  rendered, = assert_success("kubectl", "kustomize", package_root)
+  resources = rendered.split(/^---[ \t]*(?:#.*)?$\n?/).filter_map do |document|
+    next if document.strip.empty?
+    YAML.safe_load(document, permitted_classes: [], permitted_symbols: [], aliases: false)
+  end
+  identities = resources.map { |resource| [resource["apiVersion"], resource["kind"], resource.dig("metadata", "namespace").to_s, resource.dig("metadata", "name")].join("/") }
+  assert(identities == ["v1/Namespace//memos", "helm.toolkit.fluxcd.io/v2/HelmRelease/memos/memos"], "Memos package resource inventory drifted")
+
+  sync = File.read(File.join(ROOT, "clusters/home/flux-system/sync.yaml")).split(/^---[ \t]*(?:#.*)?$\n?/).filter_map do |document|
+    next if document.strip.empty?
+    YAML.safe_load(document, permitted_classes: [], permitted_symbols: [], aliases: false)
+  end
+  memos = sync.find { |resource| resource.dig("metadata", "name") == "memos" }
+  assert(memos, "Memos Flux Kustomization is missing")
+  assert(memos.dig("spec", "path") == "./clusters/home/packages/memos", "Memos Flux path drifted")
+  assert(memos.dig("spec", "suspend") == true, "Memos preparation must remain suspended")
+  assert(memos.dig("spec", "prune") == false, "Memos preparation must keep prune:false")
+  assert(memos.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "Memos outer Kustomization must stay activation-blocked")
+end
+
 test_mortis_preparation_contract
+test_memos_preparation_contract
 test_cumulative_activation_validation
 test_trek_activation_and_render_contract
 test_trek_production_activation_states

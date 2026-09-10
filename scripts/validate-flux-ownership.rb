@@ -31,6 +31,29 @@ CURL = ENV.fetch("FLUX_OWNERSHIP_CURL", "curl")
 FLUX = ENV.fetch("FLUX_OWNERSHIP_FLUX", "flux")
 HELM = ENV.fetch("FLUX_OWNERSHIP_HELM", "helm")
 KUSTOMIZATION_FILENAMES = %w[kustomization.yaml kustomization.yml Kustomization].freeze
+BOOTSTRAP_GIT_REPOSITORY_ID = "source.toolkit.fluxcd.io/v1/GitRepository/flux-system/flux-system"
+
+def local_chart_files_sha256(root, chart_path)
+  relative = chart_path.to_s.sub(%r{\A\./}, "")
+  chart_dir = root.join(relative).cleanpath
+  unless chart_dir.to_s == root.to_s || chart_dir.to_s.start_with?(root.to_s + File::SEPARATOR)
+    return nil
+  end
+  return nil unless chart_dir.directory?
+
+  entries = []
+  chart_dir.find do |path|
+    next unless path.file?
+    relative_file = path.relative_path_from(chart_dir).to_s
+    next if relative_file.split(File::SEPARATOR).include?("..")
+    entries << [relative_file, Digest::SHA256.hexdigest(path.binread)]
+  end
+  Digest::SHA256.hexdigest(entries.sort.map { |name, digest| "#{name}\n#{digest}\n" }.join)
+end
+
+def bootstrap_git_repository_id(bootstrap_source_id)
+  bootstrap_source_id || BOOTSTRAP_GIT_REPOSITORY_ID
+end
 EXPECTED_BOOTSTRAP_SOURCE = {
   "apiVersion" => "source.toolkit.fluxcd.io/v1",
   "kind" => "GitRepository",
@@ -714,7 +737,7 @@ def validate_eso_config_kustomization_for_phase!(phase, name, namespace, documen
   validate_eso_config_kustomization!(document, failures)
 end
 
-def validate_activation_chart_policy!(policy, identity, failures, artifact_cache)
+def validate_activation_chart_policy!(policy, identity, failures, artifact_cache, root, bootstrap_source_id)
   chart = policy["chart"]
   raise "active HelmRelease #{identity}: chart policy must be a mapping" unless chart.is_a?(Hash)
 
@@ -728,11 +751,38 @@ def validate_activation_chart_policy!(policy, identity, failures, artifact_cache
   repository = chart["repository"]
   raise "active HelmRelease #{identity}: chart.repository must be a mapping" unless repository.is_a?(Hash)
   repository_identity = policy_identity(repository, "active HelmRelease #{identity} chart.repository")
-  unless repository["apiVersion"] == "source.toolkit.fluxcd.io/v1" && repository["kind"] == "HelmRepository"
-    failures << "active HelmRelease #{identity}: chart.repository must identify source.toolkit.fluxcd.io/v1/HelmRepository"
+  git_chart = repository["kind"] == "GitRepository"
+  if git_chart
+    unless repository["apiVersion"] == "source.toolkit.fluxcd.io/v1"
+      failures << "active HelmRelease #{identity}: chart.repository must identify source.toolkit.fluxcd.io/v1/GitRepository"
+    end
+    expected_git = bootstrap_git_repository_id(bootstrap_source_id)
+    unless repository_identity == expected_git
+      failures << "active HelmRelease #{identity}: GitRepository must be the bootstrap flux-system source"
+    end
+    chart_path = chart["path"].to_s
+    path_pathname = Pathname.new(chart_path)
+    unless chart_path.start_with?("./") && !path_pathname.absolute? && !path_pathname.each_filename.include?("..")
+      failures << "active HelmRelease #{identity}: chart.path must be a repository-relative path beginning with ./"
+    end
+    files_sha = chart["filesSha256"].to_s
+    unless files_sha.match?(/\A[0-9a-f]{64}\z/)
+      failures << "active HelmRelease #{identity}: chart.filesSha256 must be an exact lowercase SHA256"
+    end
+    actual_sha = local_chart_files_sha256(root, chart_path)
+    if actual_sha.nil?
+      failures << "active HelmRelease #{identity}: local chart path is missing or escapes the repository"
+    elsif files_sha.match?(/\A[0-9a-f]{64}\z/) && actual_sha != files_sha
+      failures << "active HelmRelease #{identity}: local chart filesSha256 mismatch"
+    end
+    repository_url = nil
+  else
+    unless repository["apiVersion"] == "source.toolkit.fluxcd.io/v1" && repository["kind"] == "HelmRepository"
+      failures << "active HelmRelease #{identity}: chart.repository must identify source.toolkit.fluxcd.io/v1/HelmRepository"
+    end
+    repository_url = repository["url"].to_s
+    failures << "active HelmRelease #{identity}: chart.repository.url must use HTTPS" unless repository_url.match?(%r{\Ahttps://[^[:space:]]+\z})
   end
-  repository_url = repository["url"].to_s
-  failures << "active HelmRelease #{identity}: chart.repository.url must use HTTPS" unless repository_url.match?(%r{\Ahttps://[^[:space:]]+\z})
 
   artifact = chart["artifact"]
   artifact_contract = nil
@@ -849,7 +899,9 @@ def validate_activation_chart_policy!(policy, identity, failures, artifact_cache
   owner_policy = policy.fetch("owner")
   policy_identity(owner_policy, "active HelmRelease #{identity} owner")
   {
-    "chartName" => chart_name,
+    "sourceKind" => git_chart ? "GitRepository" : "HelmRepository",
+    "chartName" => git_chart ? chart["path"].to_s : chart_name,
+    "chartPath" => git_chart ? chart["path"].to_s : nil,
     "chartVersion" => chart_version,
     "repositoryIdentity" => repository_identity,
     "repositoryUrl" => repository_url,
@@ -1168,7 +1220,7 @@ if activation
     entry["__inventory_ids"] = inventory_ids
   end
   active_helm_release_policies.each do |identity, entry|
-    contract = validate_activation_chart_policy!(entry, identity, failures, artifact_cache)
+    contract = validate_activation_chart_policy!(entry, identity, failures, artifact_cache, root, bootstrap_source_id)
     active_helm_release_contracts[identity] = contract
     owner = entry.fetch("owner")
     unless approved_active_kustomizations.any? do |kustomization_id|
@@ -1488,8 +1540,10 @@ package_objects.each do |_owner, entries|
       unless chart_spec.is_a?(Hash) && chart_spec["chart"] == contract["chartName"]
         failures << "active HelmRelease #{id}: chart name must be #{contract['chartName']}"
       end
-      unless chart_spec.is_a?(Hash) && chart_spec["version"] == contract["chartVersion"]
-        failures << "active HelmRelease #{id}: chart version must be #{contract['chartVersion']}"
+      if contract["sourceKind"] != "GitRepository"
+        unless chart_spec.is_a?(Hash) && chart_spec["version"] == contract["chartVersion"]
+          failures << "active HelmRelease #{id}: chart version must be #{contract['chartVersion']}"
+        end
       end
     else
       failures << "HelmRelease #{id}: suspend must be true" unless doc.dig("spec", "suspend") == true
@@ -1498,11 +1552,34 @@ package_objects.each do |_owner, entries|
       failures << "Nextcloud HelmRelease must remain suspended"
     end
     chart_ref = doc.dig("spec", "chart", "spec", "sourceRef")
-    if !chart_ref.is_a?(Hash) || chart_ref["kind"] != "HelmRepository" || chart_ref["name"].to_s.empty?
+    chart_kind = chart_ref.is_a?(Hash) ? chart_ref["kind"].to_s : ""
+    chart_name = chart_ref.is_a?(Hash) ? chart_ref["name"].to_s : ""
+    if !chart_ref.is_a?(Hash) || chart_name.empty? || !%w[HelmRepository GitRepository].include?(chart_kind)
       failures << "HelmRelease #{id}: chart.spec.sourceRef HelmRepository is required"
+    elsif chart_kind == "GitRepository"
+      ref_ns = chart_ref["namespace"] || doc.dig("metadata", "namespace").to_s
+      repo_id = ["source.toolkit.fluxcd.io/v1", "GitRepository", ref_ns.to_s, chart_name].join("/")
+      expected_git = bootstrap_git_repository_id(bootstrap_source_id)
+      failures << "HelmRelease #{id}: GitRepository sourceRef is missing or mismatched: #{repo_id}" unless seen_objects.key?(repo_id)
+      failures << "HelmRelease #{id}: GitRepository sourceRef must be the bootstrap flux-system source" unless repo_id == expected_git
+      chart_path = doc.dig("spec", "chart", "spec", "chart").to_s
+      failures << "HelmRelease #{id}: GitRepository chart path must be repository-relative and begin with ./" unless chart_path.start_with?("./")
+      if approved_active_helm_releases.include?(id)
+        contract = active_helm_release_contracts.fetch(id)
+        if contract["sourceKind"] != "GitRepository"
+          failures << "active HelmRelease #{id}: GitRepository chart source is not approved"
+        else
+          unless repo_id == contract["repositoryIdentity"]
+            failures << "active HelmRelease #{id}: GitRepository identity must be #{contract['repositoryIdentity']}"
+          end
+          unless chart_path == contract["chartPath"]
+            failures << "active HelmRelease #{id}: GitRepository chart path must be #{contract['chartPath']}"
+          end
+        end
+      end
     else
       ref_ns = chart_ref["namespace"] || doc.dig("metadata", "namespace").to_s
-      repo_id = ["source.toolkit.fluxcd.io/v1", "HelmRepository", ref_ns.to_s, chart_ref["name"]].join("/")
+      repo_id = ["source.toolkit.fluxcd.io/v1", "HelmRepository", ref_ns.to_s, chart_name].join("/")
       failures << "HelmRelease #{id}: HelmRepository sourceRef is missing or mismatched: #{repo_id}" unless seen_objects.key?(repo_id)
       if approved_active_helm_releases.include?(id)
         contract = active_helm_release_contracts.fetch(id)

@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: memos
+  labels:
+    flux.takutk.com/activation-blocked: "true"
+  annotations:
+    flux.takutk.com/activation-blocked: "true"

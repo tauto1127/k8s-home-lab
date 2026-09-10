@@ -1,0 +1,48 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: memos
+  namespace: memos
+  annotations:
+    flux.takutk.com/activation-blocked: "true"
+spec:
+  interval: 30m
+  timeout: 10m
+  suspend: true
+  releaseName: memos
+  targetNamespace: memos
+  storageNamespace: memos
+  chart:
+    spec:
+      chart: ./apps/memos/chart
+      sourceRef:
+        kind: GitRepository
+        name: flux-system
+        namespace: flux-system
+      interval: 30m
+  install:
+    createNamespace: false
+    disableTakeOwnership: true
+    remediation:
+      retries: 0
+  upgrade:
+    disableTakeOwnership: true
+    remediation:
+      retries: 0
+      remediateLastFailure: false
+  uninstall:
+    keepHistory: true
+  values:
+    image:
+      tag: "0.29.0"
+    service:
+      type: LoadBalancer
+      annotations:
+        metallb.io/loadBalancerIPs: "192.168.11.209"
+    persistence:
+      enabled: true
+      storageClass: nfs-client
+      accessMode: ReadWriteOnce
+      size: 10Gi
+    ingress:
+      enabled: false
