@@ -24,6 +24,8 @@ BLOCKED_ACTIVATION_OBJECTS = Set.new([
   "helm.toolkit.fluxcd.io/v2/HelmRelease/nextcloud/nextcloud",
   "external-secrets.io/v1beta1/ExternalSecret/nextcloud/nextcloud-db-secret"
 ]).freeze
+TREK_PACKAGE_PATH = "./clusters/home/packages/trek"
+TREK_ACTIVATION_BLOCKED = "true"
 KUBECTL = ENV.fetch("FLUX_OWNERSHIP_KUBECTL", "kubectl")
 CURL = ENV.fetch("FLUX_OWNERSHIP_CURL", "curl")
 FLUX = ENV.fetch("FLUX_OWNERSHIP_FLUX", "flux")
@@ -626,7 +628,11 @@ def validate_activation_phase_contract!(activation, failures)
   end
 
   expected_contract.each do |key, expected|
-    unless activation[key] == expected
+    actual = activation[key]
+    if %w[activeKustomizations activeHelmReleases].include?(key)
+      actual = Array(actual).reject { |entry| entry.is_a?(Hash) && entry["namespace"] == "flux-system" && entry["name"] == "trek" || entry.is_a?(Hash) && entry["namespace"] == "trek" && entry["name"] == "trek" }
+    end
+    unless actual == expected
       failures << "fluxActivation #{phase} #{key} contract must exactly match the reviewed phase boundary"
     end
   end
@@ -636,6 +642,54 @@ def validate_active_cluster_secret_store!(document, identity, contract, failures
   unless document["spec"] == contract["spec"]
     failures << "active ClusterSecretStore #{identity}: spec must exactly match the reviewed ESO config"
   end
+end
+
+def validate_trek_stage_state!(stage, outer, inner, active_kustomizations, active_helm_releases, failures)
+  allowed_stages = %w[preparation config-active app-active]
+  unless allowed_stages.include?(stage)
+    failures << "TREK activation stage is not recognized: #{stage}"
+    return
+  end
+  unless outer.is_a?(Hash) && inner.is_a?(Hash)
+    failures << "TREK activation state requires both outer Kustomization and inner HelmRelease"
+    return
+  end
+
+  outer_id = "kustomize.toolkit.fluxcd.io/v1/Kustomization/flux-system/trek"
+  inner_id = "helm.toolkit.fluxcd.io/v2/HelmRelease/trek/trek"
+  outer_suspend = outer.dig("spec", "suspend")
+  inner_suspend = inner.dig("spec", "suspend")
+  outer_marker = outer.dig("metadata", "annotations", ACTIVATION_BLOCKED)
+  inner_marker = inner.dig("metadata", "annotations", ACTIVATION_BLOCKED)
+  outer_blocked = stage == "preparation"
+  inner_blocked = stage != "app-active"
+
+  failures << "TREK outer Kustomization path must be #{TREK_PACKAGE_PATH}" unless outer.dig("spec", "path") == TREK_PACKAGE_PATH
+  failures << "TREK outer Kustomization dependsOn must be exactly eso-controller then eso-config" unless outer.dig("spec", "dependsOn") == [{"name" => "eso-controller"}, {"name" => "eso-config"}]
+  failures << "TREK outer Kustomization prune must remain false" unless outer.dig("spec", "prune") == false
+  failures << "TREK outer Kustomization suspend state does not match stage #{stage}" unless outer_suspend == outer_blocked
+  failures << "TREK inner HelmRelease suspend state does not match stage #{stage}" unless inner_suspend == inner_blocked
+  failures << "TREK outer Kustomization activation marker does not match stage #{stage}" unless (outer_marker == TREK_ACTIVATION_BLOCKED) == outer_blocked
+  failures << "TREK inner HelmRelease activation marker does not match stage #{stage}" unless (inner_marker == TREK_ACTIVATION_BLOCKED) == inner_blocked
+  failures << "TREK stage #{stage} must not activate an inner HelmRelease under a suspended outer Kustomization" if outer_suspend == true && inner_suspend == false
+
+  if stage == "preparation"
+    failures << "TREK preparation must not be in active Kustomization ownership policy" if active_kustomizations.key?(outer_id)
+    failures << "TREK preparation must not be in active HelmRelease ownership policy" if active_helm_releases.key?(inner_id)
+  else
+    failures << "TREK stage #{stage} requires active Kustomization ownership policy" unless active_kustomizations.key?(outer_id)
+    failures << "TREK stage #{stage} requires active HelmRelease ownership policy" unless active_helm_releases.key?(inner_id)
+  end
+end
+
+def trek_config_active_release?(identity, stage, outer, active_kustomization_policies, active_helm_release_policies, active_helm_release_contracts)
+  stage == "config-active" &&
+    identity == "helm.toolkit.fluxcd.io/v2/HelmRelease/trek/trek" &&
+    outer.is_a?(Hash) && outer.dig("spec", "suspend") == false &&
+    outer.dig("metadata", "annotations", ACTIVATION_BLOCKED) != TREK_ACTIVATION_BLOCKED &&
+    active_kustomization_policies.key?("kustomize.toolkit.fluxcd.io/v1/Kustomization/flux-system/trek") &&
+    active_helm_release_policies.key?(identity) &&
+    active_helm_release_contracts.dig(identity, "trekStage") == "config-active"
 end
 
 def validate_eso_config_kustomization!(document, failures)
@@ -788,6 +842,9 @@ def validate_activation_chart_policy!(policy, identity, failures, artifact_cache
   if safety.key?("disableHooks") && ![true, false].include?(safety["disableHooks"])
     failures << "active HelmRelease #{identity}: safety.disableHooks must be a boolean"
   end
+  if safety.key?("trekStage") && !%w[config-active app-active].include?(safety["trekStage"])
+    failures << "active HelmRelease #{identity}: safety.trekStage must be config-active or app-active"
+  end
 
   owner_policy = policy.fetch("owner")
   policy_identity(owner_policy, "active HelmRelease #{identity} owner")
@@ -800,7 +857,8 @@ def validate_activation_chart_policy!(policy, identity, failures, artifact_cache
     "artifact" => artifact_contract,
     "installCRDs" => safety["installCRDs"],
     "disableHooks" => safety["disableHooks"],
-    "linuxCRDsEnabled" => safety["linuxCRDsEnabled"]
+    "linuxCRDsEnabled" => safety["linuxCRDsEnabled"],
+    "trekStage" => safety["trekStage"]
   }
 end
 
@@ -819,6 +877,7 @@ def validate_active_helm_release_safety(document, identity, contract, failures)
   }.each do |field, expected|
     failures << "active HelmRelease #{identity}: spec.#{field} must be #{expected}" unless spec[field] == expected
   end
+  return if contract["trekStage"] == "config-active"
   %w[install upgrade].each do |action|
     action_spec = spec[action]
     unless action_spec.is_a?(Hash)
@@ -1359,27 +1418,71 @@ active_kustomization_policies.each do |identity, entry|
                 "found #{actual_inventory.to_a.sort.join(', ')}"
   end
 end
+
+trek_activation = policy["trekActivation"]
+trek_activation_stage = trek_activation.is_a?(Hash) ? trek_activation["stage"] : nil
+trek_outer = declared_flux_resources["kustomize.toolkit.fluxcd.io/v1/Kustomization/flux-system/trek"]
+trek_config_active_release = lambda do |identity|
+  trek_config_active_release?(identity, trek_activation_stage, trek_outer, active_kustomization_policies, active_helm_release_policies, active_helm_release_contracts)
+end
+
 actual_active_kustomization_owners.each do |owner|
   Array(package_objects[owner]).each do |path, document|
     next unless document.is_a?(Hash)
 
     object_id = required_identity(document, path.to_s)
-    if BLOCKED_ACTIVATION_OBJECTS.include?(object_id) || document.dig("metadata", "annotations", ACTIVATION_BLOCKED) == "true"
+    trek_config_exception = trek_config_active_release.call(object_id)
+    if (BLOCKED_ACTIVATION_OBJECTS.include?(object_id) || document.dig("metadata", "annotations", ACTIVATION_BLOCKED) == "true") && !trek_config_exception
       failures << "active Flux Kustomization #{owner} renders a blocked Nextcloud object: #{object_id}"
     end
   end
 end
+
+trek_activation = policy["trekActivation"]
+if trek_activation
+  unless trek_activation.is_a?(Hash) && trek_activation["stage"].is_a?(String) && !trek_activation["stage"].empty? && trek_activation["reason"].to_s.strip != ""
+    failures << "trekActivation must declare a stage and reason"
+  else
+    trek_outer = declared_flux_resources["kustomize.toolkit.fluxcd.io/v1/Kustomization/flux-system/trek"]
+    trek_inner = rendered_documents["helm.toolkit.fluxcd.io/v2/HelmRelease/trek/trek"]
+    validate_trek_stage_state!(trek_activation["stage"], trek_outer, trek_inner, active_kustomization_policies, active_helm_release_policies, failures)
+  end
+end
+
+# Config activation removes markers from configuration resources while retaining the
+# deliberate blocked marker on the suspended inner HelmRelease.
+trek_package_owner = namespaced_identity("Kustomization", "flux-system", "trek")
+if trek_activation_stage && Array(package_objects[trek_package_owner]).any?
+  Array(package_objects[trek_package_owner]).each do |path, document|
+    next unless document.is_a?(Hash)
+    identity = required_identity(document, path.to_s)
+    annotations = document.dig("metadata", "annotations") || {}
+    labels = document.dig("metadata", "labels") || {}
+    marked = annotations[ACTIVATION_BLOCKED] == TREK_ACTIVATION_BLOCKED || labels[ACTIVATION_BLOCKED] == TREK_ACTIVATION_BLOCKED
+    allowed_inner = identity == "helm.toolkit.fluxcd.io/v2/HelmRelease/trek/trek" && trek_activation_stage != "app-active"
+    allowed_namespace = identity == "v1/Namespace//trek" && trek_activation_stage == "preparation"
+    failures << "TREK stage #{trek_activation_stage}: unexpected activation-blocked marker on #{identity}" if marked && !allowed_inner && !allowed_namespace
+    if trek_activation_stage != "preparation" && allowed_namespace && marked
+      failures << "TREK stage #{trek_activation_stage}: Namespace/trek activation markers must be removed"
+    end
+  end
+end
+
 package_objects.each do |_owner, entries|
   entries.each do |path, doc|
     next unless doc.is_a?(Hash) && doc["kind"] == "HelmRelease"
     id = required_identity(doc, path.to_s)
-    unless doc["spec"].is_a?(Hash)
+    if doc["spec"].is_a?(Hash)
+    else
       failures << "HelmRelease #{id}: spec must be a mapping"
       next
     end
     if approved_active_helm_releases.include?(id)
-      failures << "approved active HelmRelease #{id}: suspend must be false" unless doc.dig("spec", "suspend") == false
       contract = active_helm_release_contracts.fetch(id)
+      suspended_config_stage = contract["trekStage"] == "config-active"
+      unless doc.dig("spec", "suspend") == false || (suspended_config_stage && trek_config_active_release.call(id))
+        failures << "approved active HelmRelease #{id}: suspend must be false"
+      end
       validate_active_helm_release_safety(doc, id, contract, failures)
       chart_spec = doc.dig("spec", "chart", "spec")
       unless chart_spec.is_a?(Hash) && chart_spec["chart"] == contract["chartName"]
@@ -1449,7 +1552,8 @@ actual_active_kustomization_owners.each do |owner|
 
     identity = required_identity(doc, path.to_s)
     release_active = doc["spec"].is_a?(Hash) && doc["spec"]["suspend"] == false
-    unless approved_active_helm_releases.include?(identity) && release_active
+    config_exception = trek_config_active_release.call(identity) && !release_active
+    unless approved_active_helm_releases.include?(identity) && (release_active || config_exception)
       failures << "active Flux Kustomization #{owner} must activate HelmRelease #{identity} in the same policy"
     end
   end

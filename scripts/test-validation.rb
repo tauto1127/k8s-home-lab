@@ -1679,6 +1679,205 @@ Dir.mktmpdir("flux-bootstrap-validation-test") do |temporary_root|
   assert((stdout + stderr).include?("Kustomize renderer is unavailable"), "unavailable bootstrap renderer was accepted")
 end
 
+def test_trek_activation_and_render_contract
+  sync = YAML.load_stream(File.read(File.join(ROOT, "clusters/home/flux-system/sync.yaml")))
+  trek_sync = sync.find { |resource| resource.dig("metadata", "name") == "trek" }
+  assert(trek_sync, "TREK Flux Kustomization is missing")
+  package_root = File.join(ROOT, "clusters/home/packages/trek")
+  package = YAML.load_stream(File.read(File.join(package_root, "helmrelease.yaml"))).first
+  assert(package.dig("spec", "suspend") == true, "TREK HelmRelease must remain suspended")
+  assert(package.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "TREK HelmRelease activation marker is missing")
+  assert(package.dig("spec", "chart", "spec", "version") == "4.2.1", "TREK chart version drifted")
+  assert(package.dig("spec", "values", "image", "tag") == "4.2.1@sha256:777f4d647e973fe7d87fecd957e854b86d57e8d977fd041763e0ca19b3c2e2c0", "TREK image digest drifted")
+
+  ingress_annotations = package.dig("spec", "values", "ingress", "annotations")
+  assert(ingress_annotations == {"konghq.com/strip-path" => "false"}, "TREK Ingress must contain only strip-path")
+  patches = package.dig("spec", "postRenderers", 0, "kustomize", "patches")
+  assert(patches.length == 1, "TREK must have exactly one post-renderer patch")
+  patch = patches.first
+  assert(patch["target"] == {"version" => "v1", "kind" => "Service", "name" => "trek"}, "TREK timeout patch target drifted")
+  patch_document = YAML.load_stream(patch.fetch("patch")).first
+  assert(patch_document.first["path"] == "/metadata/annotations", "TREK timeout patch path drifted")
+  assert(patch_document.first.dig("value") == {
+    "konghq.com/connect-timeout" => "60000",
+    "konghq.com/read-timeout" => "86400000",
+    "konghq.com/write-timeout" => "86400000"
+  }, "TREK Service timeout annotations drifted")
+
+  active_kustomizations = {}
+  active_helm_releases = {}
+  failures = []
+  validate_trek_stage_state!("preparation", trek_sync, package, active_kustomizations, active_helm_releases, failures)
+  assert(failures.empty?, "TREK preparation state was rejected: #{failures.join('; ')}")
+
+  outer_id = "kustomize.toolkit.fluxcd.io/v1/Kustomization/flux-system/trek"
+  inner_id = "helm.toolkit.fluxcd.io/v2/HelmRelease/trek/trek"
+  config_outer = Marshal.load(Marshal.dump(trek_sync))
+  config_outer["spec"]["suspend"] = false
+  config_outer["metadata"]["annotations"].delete("flux.takutk.com/activation-blocked")
+  config_policy = {outer_id => {}}
+  config_helm_policy = {inner_id => {}}
+  config_inner = Marshal.load(Marshal.dump(package))
+  failures = []
+  validate_trek_stage_state!("config-active", config_outer, config_inner, config_policy, config_helm_policy, failures)
+  assert(failures.empty?, "TREK config-active state was rejected: #{failures.join('; ')}")
+
+  app_inner = Marshal.load(Marshal.dump(package))
+  app_inner["spec"]["suspend"] = false
+  app_inner["metadata"]["annotations"].delete("flux.takutk.com/activation-blocked")
+  app_policy = {outer_id => {}}
+  app_helm_policy = {inner_id => {}}
+  failures = []
+  validate_trek_stage_state!("app-active", config_outer, app_inner, app_policy, app_helm_policy, failures)
+  assert(failures.empty?, "TREK app-active state was rejected: #{failures.join('; ')}")
+
+  invalid_cases = [
+    ["preparation with active outer", Marshal.load(Marshal.dump(config_outer)), Marshal.load(Marshal.dump(package)), active_kustomizations, active_helm_releases],
+    ["config-active with blocked outer", Marshal.load(Marshal.dump(trek_sync)), Marshal.load(Marshal.dump(package)), config_policy, config_helm_policy],
+    ["app-active with blocked inner", config_outer, Marshal.load(Marshal.dump(package)), app_policy, app_helm_policy],
+    ["app-active under suspended outer", Marshal.load(Marshal.dump(trek_sync)), app_inner, app_policy, app_helm_policy],
+    ["config-active with active inner", config_outer, app_inner, config_policy, config_helm_policy]
+  ]
+  invalid_cases.each do |label, outer, inner, kustomizations, helm_releases|
+    failures = []
+    validate_trek_stage_state!(label.start_with?("preparation") ? "preparation" : label.start_with?("config") ? "config-active" : "app-active", outer, inner, kustomizations, helm_releases, failures)
+    assert(failures.any?, "TREK invalid state was accepted: #{label}")
+  end
+end
+
+def write_yaml_stream(path, documents)
+  File.write(path, YAML.dump_stream(*documents))
+end
+
+def build_trek_activation_fixture(root, stage, sabotage: nil)
+  sync_path = File.join(root, "clusters/home/flux-system/sync.yaml")
+  sync = YAML.load_stream(File.read(sync_path))
+  trek_sync = sync.find { |resource| resource.dig("metadata", "name") == "trek" }
+  trek_sync["spec"]["suspend"] = stage == "preparation"
+  sync.each do |resource|
+    if ["eso-config", "csi-secrets-store"].include?(resource.dig("metadata", "name"))
+      resource["spec"]["suspend"] = true
+    end
+  end
+  csi_helm_path = File.join(root, "clusters/home/packages/csi-secrets-store/helmrelease.yaml")
+  csi_helm = YAML.load_stream(File.read(csi_helm_path)).first
+  csi_helm["spec"]["suspend"] = true
+  write_yaml_stream(csi_helm_path, [csi_helm])
+  trek_sync["metadata"]["annotations"] ||= {}
+  if stage == "preparation"
+    trek_sync["metadata"]["annotations"]["flux.takutk.com/activation-blocked"] = "true"
+  else
+    trek_sync["metadata"]["annotations"].delete("flux.takutk.com/activation-blocked")
+  end
+  write_yaml_stream(sync_path, sync)
+
+  package_root = File.join(root, "clusters/home/packages/trek")
+  namespace_path = File.join(package_root, "namespace.yaml")
+  namespace = YAML.load_stream(File.read(namespace_path)).first
+  if stage == "preparation"
+    namespace["metadata"]["labels"]["flux.takutk.com/activation-blocked"] = "true"
+    namespace["metadata"]["annotations"]["flux.takutk.com/activation-blocked"] = "true"
+  else
+    namespace["metadata"].delete("labels")
+    namespace["metadata"].delete("annotations")
+  end
+  write_yaml_stream(namespace_path, [namespace])
+
+  helm_path = File.join(package_root, "helmrelease.yaml")
+  helm = YAML.load_stream(File.read(helm_path)).first
+  helm["spec"]["suspend"] = stage != "app-active"
+  helm["metadata"]["annotations"] ||= {}
+  if stage == "app-active"
+    helm["metadata"]["annotations"].delete("flux.takutk.com/activation-blocked")
+  else
+    helm["metadata"]["annotations"]["flux.takutk.com/activation-blocked"] = "true"
+  end
+  write_yaml_stream(helm_path, [helm])
+
+  policy_path = File.join(root, ".github/manifest-policy.yaml")
+  policy = YAML.safe_load(File.read(policy_path))
+  policy["trekActivation"]["stage"] = stage
+  activation = policy.fetch("fluxActivation")
+  activation["phase"] = "eso-controller"
+  activation["activeKustomizations"] = activation["activeKustomizations"].select { |entry| entry["name"] == "eso-controller" }
+  activation["activeHelmReleases"] = activation["activeHelmReleases"].select { |entry| entry["name"] == "external-secrets" }
+  outer_id = "kustomize.toolkit.fluxcd.io/v1/Kustomization/flux-system/trek"
+  inner_id = "helm.toolkit.fluxcd.io/v2/HelmRelease/trek/trek"
+  activation["activeKustomizations"] << {
+    "apiVersion" => "kustomize.toolkit.fluxcd.io/v1", "kind" => "Kustomization",
+    "namespace" => "flux-system", "name" => "trek", "path" => "./clusters/home/packages/trek",
+    "inventory" => [
+      {"apiVersion" => "v1", "kind" => "Namespace", "namespace" => "", "name" => "trek"},
+      {"apiVersion" => "external-secrets.io/v1beta1", "kind" => "ExternalSecret", "namespace" => "trek", "name" => "trek-secrets"},
+      {"apiVersion" => "helm.toolkit.fluxcd.io/v2", "kind" => "HelmRelease", "namespace" => "trek", "name" => "trek"},
+      {"apiVersion" => "source.toolkit.fluxcd.io/v1", "kind" => "HelmRepository", "namespace" => "flux-system", "name" => "trek"}
+    ]
+  }
+  activation["activeHelmReleases"] << {
+    "apiVersion" => "helm.toolkit.fluxcd.io/v2", "kind" => "HelmRelease", "namespace" => "trek", "name" => "trek",
+    "owner" => {"apiVersion" => "kustomize.toolkit.fluxcd.io/v1", "kind" => "Kustomization", "namespace" => "flux-system", "name" => "trek"},
+    "chart" => {"name" => "trek", "version" => "4.2.1", "repository" => {"apiVersion" => "source.toolkit.fluxcd.io/v1", "kind" => "HelmRepository", "namespace" => "flux-system", "name" => "trek", "url" => "https://chart.liketrek.com"}},
+    "safety" => {"trekStage" => stage}
+  }
+  case sabotage
+  when :unrelated_blocked
+    secret = YAML.load_stream(File.read(File.join(package_root, "external-secret.yaml"))).first
+    secret["metadata"]["annotations"] = {"flux.takutk.com/activation-blocked" => "true"}
+    write_yaml_stream(File.join(package_root, "external-secret.yaml"), [secret])
+  when :unapproved_suspended
+    activation["activeHelmReleases"].reject! { |entry| entry["namespace"] == "trek" && entry["name"] == "trek" }
+  when :inner_active_outer_suspended
+    trek_sync["spec"]["suspend"] = true
+    trek_sync["metadata"]["annotations"]["flux.takutk.com/activation-blocked"] = "true"
+    write_yaml_stream(sync_path, sync)
+    helm["spec"]["suspend"] = false
+    helm["metadata"]["annotations"].delete("flux.takutk.com/activation-blocked")
+    write_yaml_stream(helm_path, [helm])
+  end
+  write_yaml_stream(policy_path, [policy])
+
+  components = File.read(File.join(root, "clusters/home/flux-system/gotk-components.yaml"))
+  gotk_sync = File.read(File.join(root, "clusters/home/flux-system/gotk-sync.yaml"))
+  File.write(File.join(root, "clusters/home/rendered.out"), "#{components}---\n#{gotk_sync}---\n#{File.read(sync_path)}")
+  FileUtils.mkdir_p(File.join(root, ".flux-test"))
+  File.write(File.join(root, ".flux-test/generated-components.yaml"), components)
+  File.write(File.join(root, ".flux-test/flux"), "#!/usr/bin/env bash\nset -euo pipefail\ncat .flux-test/generated-components.yaml\n")
+  FileUtils.chmod(0o755, File.join(root, ".flux-test/flux"))
+  File.write(File.join(root, ".flux-test/curl"), "#!/usr/bin/env bash\nset -euo pipefail\nurl=\"${!#}\"\nexec ruby -ropen-uri -e 'STDOUT.binmode; STDOUT.write(URI.open(ARGV.fetch(0)).read)' \"$url\"\n")
+  FileUtils.chmod(0o755, File.join(root, ".flux-test/curl"))
+  [File.join(root, ".flux-test/flux"), File.join(root, ".flux-test/curl")]
+end
+
+def test_trek_production_activation_states
+  validator = File.join(ROOT, "scripts/validate-flux-ownership.rb")
+  %w[config-active app-active].each do |stage|
+    Dir.mktmpdir("trek-production-#{stage}") do |temporary_root|
+      fixture_root = File.join(temporary_root, "repo")
+      FileUtils.cp_r(ROOT, fixture_root)
+      flux_path, curl_path = build_trek_activation_fixture(fixture_root, stage)
+      stdout, stderr, status = run_command("ruby", validator, fixture_root, env: {"FLUX_OWNERSHIP_FLUX" => flux_path, "FLUX_OWNERSHIP_CURL" => curl_path})
+      assert(status.success?, "full TREK #{stage} fixture was rejected:\n#{stdout}\n#{stderr}")
+      puts "TREK production #{stage} fixture passed."
+    end
+  end
+
+  {
+    unrelated_blocked: "unexpected activation-blocked marker",
+    unapproved_suspended: "active HelmRelease policy must exactly match",
+    inner_active_outer_suspended: "TREK outer Kustomization suspend state does not match stage"
+  }.each do |sabotage, expected|
+    Dir.mktmpdir("trek-production-sabotage") do |temporary_root|
+      fixture_root = File.join(temporary_root, "repo")
+      FileUtils.cp_r(ROOT, fixture_root)
+      flux_path, curl_path = build_trek_activation_fixture(fixture_root, "config-active", sabotage: sabotage)
+      stdout, stderr, status = run_command("ruby", validator, fixture_root, env: {"FLUX_OWNERSHIP_FLUX" => flux_path, "FLUX_OWNERSHIP_CURL" => curl_path})
+      assert(!status.success?, "TREK sabotage was accepted: #{sabotage}\n#{stdout}\n#{stderr}")
+      assert((stdout + stderr).include?(expected), "TREK sabotage #{sabotage} was not reported: #{expected}")
+    end
+  end
+end
+
+
 def test_mortis_preparation_contract
   package_root = File.join(ROOT, "clusters/home/packages/mortis")
   package_kustomization = YAML.safe_load(File.read(File.join(package_root, "kustomization.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
@@ -1712,4 +1911,6 @@ end
 
 test_mortis_preparation_contract
 test_cumulative_activation_validation
+test_trek_activation_and_render_contract
+test_trek_production_activation_states
 puts "Validation fixtures passed."

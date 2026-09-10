@@ -56,6 +56,10 @@ renderedClusterAdminBindings:
 
 bootstrapManagedSources: []
 
+trekActivation:
+  stage: preparation
+  reason: TREK activation is a three-state Git-only transition; preparation must remain fully blocked.
+
 fluxActivation:
   phase: csi-secrets-store
   reason: Keep the adopted ESO controller and ClusterSecretStore active, then adopt only the existing CSI Helm release after its read-only preflight; keep Nextcloud suspended.
