@@ -63,7 +63,7 @@ PVC、PV、namespace、CRD、privileged bindingは、初回移行時に
 | `clusters/home/flux-system/gotk-components.yaml` | bootstrap | Flux `v2.9.3`のCRD/controller/RBAC。生成物とupstream bytesのSHA256をpolicyで検証し、公式bundleの`cluster-admin`付与を含むcluster適用は別承認とする。 |
 | `clusters/home/flux-system/gotk-sync.yaml` | bootstrap | public GitRepositoryとactive root Kustomization。rootは`flux-system/`だけをcomposeし、`packages/`を直接所有しない。 |
 | `clusters/home/flux-system/sync.yaml` | migration-pending | 6つのpackage Kustomization定義。今回のdesiredではESO controller/config/CSIとTREK外側Kustomizationが`suspend: false`、NextcloudとMortisは`suspend: true`、全て`prune: false`。CSIは`eso-config`に、TREKはESO controller/configに依存する。 |
-| `clusters/home/packages/trek/*`, `clusters/home/flux-system/sync.yaml` | migration-pending | TREK 4.2.1 config-active package。Namespace、HelmRepository、ExternalSecretと停止中HelmReleaseを外側Kustomizationが所有し、内側HelmReleaseはactivation marker付きの`suspend: true`を維持する。app activationは別Git PRで行う。 |
+| `clusters/home/packages/trek/*`, `clusters/home/flux-system/sync.yaml` | migration-pending | TREK 4.2.1 app-active package。Namespace、HelmRepository、ExternalSecretと稼働中HelmReleaseを外側Kustomizationが所有する。外側Kustomizationは`suspend: false`、`prune: false`で、内側HelmReleaseも`suspend: false`とする。 |
 | `clusters/home/packages/eso-controller/helmrelease.yaml` | flux-managed | PR #46で移行済み。初回upgrade成功、Ready、chart artifact digest一致を確認済み。 |
 
 すべてのraw `flux-candidate` packageには`kustomization.yaml`がある。Helm chartの
