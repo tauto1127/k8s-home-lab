@@ -1679,33 +1679,70 @@ Dir.mktmpdir("flux-bootstrap-validation-test") do |temporary_root|
   assert((stdout + stderr).include?("Kustomize renderer is unavailable"), "unavailable bootstrap renderer was accepted")
 end
 
-def test_trek_preparation_contract
+def test_trek_activation_and_render_contract
   sync = YAML.load_stream(File.read(File.join(ROOT, "clusters/home/flux-system/sync.yaml")))
   trek_sync = sync.find { |resource| resource.dig("metadata", "name") == "trek" }
   assert(trek_sync, "TREK Flux Kustomization is missing")
-  assert(trek_sync.dig("spec", "path") == "./clusters/home/packages/trek", "TREK Flux path drifted")
-  assert(trek_sync.dig("spec", "suspend") == true, "TREK preparation must remain suspended")
-  assert(trek_sync.dig("spec", "prune") == false, "TREK preparation must keep prune:false")
-  assert(trek_sync.dig("spec", "dependsOn") == [{"name" => "eso-controller"}, {"name" => "eso-config"}], "TREK dependencies drifted")
-  assert(trek_sync.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "TREK outer activation marker is missing")
-
   package_root = File.join(ROOT, "clusters/home/packages/trek")
   package = YAML.load_stream(File.read(File.join(package_root, "helmrelease.yaml"))).first
   assert(package.dig("spec", "suspend") == true, "TREK HelmRelease must remain suspended")
   assert(package.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "TREK HelmRelease activation marker is missing")
   assert(package.dig("spec", "chart", "spec", "version") == "4.2.1", "TREK chart version drifted")
+  assert(package.dig("spec", "values", "image", "tag") == "4.2.1@sha256:777f4d647e973fe7d87fecd957e854b86d57e8d977fd041763e0ca19b3c2e2c0", "TREK image digest drifted")
 
-  failures = []
-  sabotaged = Marshal.load(Marshal.dump(trek_sync))
-  sabotaged["spec"]["suspend"] = false
-  validate_trek_preparation_kustomization!(sabotaged, failures)
-  assert(failures.any? { |failure| failure.include?("suspend:true") }, "TREK outer suspend safety gate did not bite")
+  ingress_annotations = package.dig("spec", "values", "ingress", "annotations")
+  assert(ingress_annotations == {"konghq.com/strip-path" => "false"}, "TREK Ingress must contain only strip-path")
+  patches = package.dig("spec", "postRenderers", 0, "kustomize", "patches")
+  assert(patches.length == 1, "TREK must have exactly one post-renderer patch")
+  patch = patches.first
+  assert(patch["target"] == {"version" => "v1", "kind" => "Service", "name" => "trek"}, "TREK timeout patch target drifted")
+  patch_document = YAML.load_stream(patch.fetch("patch")).first
+  assert(patch_document.first["path"] == "/metadata/annotations", "TREK timeout patch path drifted")
+  assert(patch_document.first.dig("value") == {
+    "konghq.com/connect-timeout" => "60000",
+    "konghq.com/read-timeout" => "86400000",
+    "konghq.com/write-timeout" => "86400000"
+  }, "TREK Service timeout annotations drifted")
 
+  active_kustomizations = {}
+  active_helm_releases = {}
   failures = []
-  sabotaged = Marshal.load(Marshal.dump(package))
-  sabotaged["metadata"]["annotations"].delete("flux.takutk.com/activation-blocked")
-  validate_trek_preparation_helm_release!(sabotaged, failures)
-  assert(failures.any? { |failure| failure.include?("activation-blocked") }, "TREK inner activation marker safety gate did not bite")
+  validate_trek_stage_state!("preparation", trek_sync, package, active_kustomizations, active_helm_releases, failures)
+  assert(failures.empty?, "TREK preparation state was rejected: #{failures.join('; ')}")
+
+  outer_id = "kustomize.toolkit.fluxcd.io/v1/Kustomization/flux-system/trek"
+  inner_id = "helm.toolkit.fluxcd.io/v2/HelmRelease/trek/trek"
+  config_outer = Marshal.load(Marshal.dump(trek_sync))
+  config_outer["spec"]["suspend"] = false
+  config_outer["metadata"]["annotations"].delete("flux.takutk.com/activation-blocked")
+  config_policy = {outer_id => {}}
+  config_helm_policy = {inner_id => {}}
+  config_inner = Marshal.load(Marshal.dump(package))
+  failures = []
+  validate_trek_stage_state!("config-active", config_outer, config_inner, config_policy, config_helm_policy, failures)
+  assert(failures.empty?, "TREK config-active state was rejected: #{failures.join('; ')}")
+
+  app_inner = Marshal.load(Marshal.dump(package))
+  app_inner["spec"]["suspend"] = false
+  app_inner["metadata"]["annotations"].delete("flux.takutk.com/activation-blocked")
+  app_policy = {outer_id => {}}
+  app_helm_policy = {inner_id => {}}
+  failures = []
+  validate_trek_stage_state!("app-active", config_outer, app_inner, app_policy, app_helm_policy, failures)
+  assert(failures.empty?, "TREK app-active state was rejected: #{failures.join('; ')}")
+
+  invalid_cases = [
+    ["preparation with active outer", Marshal.load(Marshal.dump(config_outer)), Marshal.load(Marshal.dump(package)), active_kustomizations, active_helm_releases],
+    ["config-active with blocked outer", Marshal.load(Marshal.dump(trek_sync)), Marshal.load(Marshal.dump(package)), config_policy, config_helm_policy],
+    ["app-active with blocked inner", config_outer, Marshal.load(Marshal.dump(package)), app_policy, app_helm_policy],
+    ["app-active under suspended outer", Marshal.load(Marshal.dump(trek_sync)), app_inner, app_policy, app_helm_policy],
+    ["config-active with active inner", config_outer, app_inner, config_policy, config_helm_policy]
+  ]
+  invalid_cases.each do |label, outer, inner, kustomizations, helm_releases|
+    failures = []
+    validate_trek_stage_state!(label.start_with?("preparation") ? "preparation" : label.start_with?("config") ? "config-active" : "app-active", outer, inner, kustomizations, helm_releases, failures)
+    assert(failures.any?, "TREK invalid state was accepted: #{label}")
+  end
 end
 
 def test_mortis_preparation_contract
@@ -1741,5 +1778,5 @@ end
 
 test_mortis_preparation_contract
 test_cumulative_activation_validation
-test_trek_preparation_contract
+test_trek_activation_and_render_contract
 puts "Validation fixtures passed."

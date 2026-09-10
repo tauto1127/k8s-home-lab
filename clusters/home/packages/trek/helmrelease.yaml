@@ -23,18 +23,36 @@ spec:
       interval: 30m
   install:
     createNamespace: false
+    crds: Skip
+    disableTakeOwnership: true
     remediation:
       retries: 0
   upgrade:
+    crds: Skip
+    disableTakeOwnership: true
     remediation:
       retries: 0
       remediateLastFailure: false
   uninstall:
     keepHistory: true
+  postRenderers:
+    - kustomize:
+        patches:
+          - target:
+              version: v1
+              kind: Service
+              name: trek
+            patch: |-
+              - op: add
+                path: /metadata/annotations
+                value:
+                  konghq.com/connect-timeout: "60000"
+                  konghq.com/read-timeout: "86400000"
+                  konghq.com/write-timeout: "86400000"
   values:
     image:
       repository: mauriceboe/trek
-      tag: 4.2.1
+      tag: "4.2.1@sha256:777f4d647e973fe7d87fecd957e854b86d57e8d977fd041763e0ca19b3c2e2c0"
       pullPolicy: IfNotPresent
     updateStrategy: Recreate
     service:
@@ -66,9 +84,6 @@ spec:
       enabled: true
       className: kong
       annotations:
-        konghq.com/connect-timeout: "60000"
-        konghq.com/read-timeout: "86400000"
-        konghq.com/write-timeout: "86400000"
         konghq.com/strip-path: "false"
       hosts:
         - host: trek.takutk.com
