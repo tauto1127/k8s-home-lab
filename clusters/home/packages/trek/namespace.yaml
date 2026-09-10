@@ -2,7 +2,3 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: trek
-  labels:
-    flux.takutk.com/activation-blocked: "true"
-  annotations:
-    flux.takutk.com/activation-blocked: "true"

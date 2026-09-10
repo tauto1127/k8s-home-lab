@@ -1683,7 +1683,12 @@ def test_trek_activation_and_render_contract
   sync = YAML.load_stream(File.read(File.join(ROOT, "clusters/home/flux-system/sync.yaml")))
   trek_sync = sync.find { |resource| resource.dig("metadata", "name") == "trek" }
   assert(trek_sync, "TREK Flux Kustomization is missing")
+  assert(trek_sync.dig("spec", "suspend") == false, "TREK config activation must enable outer Kustomization")
+  assert(trek_sync.dig("metadata", "annotations", "flux.takutk.com/activation-blocked").nil?, "TREK outer activation marker must be removed")
   package_root = File.join(ROOT, "clusters/home/packages/trek")
+  namespace = YAML.load_stream(File.read(File.join(package_root, "namespace.yaml"))).first
+  assert(namespace.dig("metadata", "labels", "flux.takutk.com/activation-blocked").nil?, "TREK Namespace activation label must be removed")
+  assert(namespace.dig("metadata", "annotations", "flux.takutk.com/activation-blocked").nil?, "TREK Namespace activation annotation must be removed")
   package = YAML.load_stream(File.read(File.join(package_root, "helmrelease.yaml"))).first
   assert(package.dig("spec", "suspend") == true, "TREK HelmRelease must remain suspended")
   assert(package.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "TREK HelmRelease activation marker is missing")
@@ -1704,16 +1709,19 @@ def test_trek_activation_and_render_contract
     "konghq.com/write-timeout" => "86400000"
   }, "TREK Service timeout annotations drifted")
 
-  active_kustomizations = {}
-  active_helm_releases = {}
-  failures = []
-  validate_trek_stage_state!("preparation", trek_sync, package, active_kustomizations, active_helm_releases, failures)
-  assert(failures.empty?, "TREK preparation state was rejected: #{failures.join('; ')}")
-
+  policy = YAML.safe_load(File.read(File.join(ROOT, ".github/manifest-policy.yaml")))
+  activation = policy.fetch("fluxActivation")
   outer_id = "kustomize.toolkit.fluxcd.io/v1/Kustomization/flux-system/trek"
   inner_id = "helm.toolkit.fluxcd.io/v2/HelmRelease/trek/trek"
+  active_kustomizations = {outer_id => activation.fetch("activeKustomizations").find { |entry| entry["name"] == "trek" }}
+  active_helm_releases = {inner_id => activation.fetch("activeHelmReleases").find { |entry| entry["name"] == "trek" }}
+  failures = []
+  validate_trek_stage_state!("config-active", trek_sync, package, active_kustomizations, active_helm_releases, failures)
+  assert(failures.empty?, "TREK config-active state was rejected: #{failures.join('; ')}")
+
   config_outer = Marshal.load(Marshal.dump(trek_sync))
   config_outer["spec"]["suspend"] = false
+  config_outer["metadata"]["annotations"] ||= {}
   config_outer["metadata"]["annotations"].delete("flux.takutk.com/activation-blocked")
   config_policy = {outer_id => {}}
   config_helm_policy = {inner_id => {}}
@@ -1733,9 +1741,19 @@ def test_trek_activation_and_render_contract
 
   invalid_cases = [
     ["preparation with active outer", Marshal.load(Marshal.dump(config_outer)), Marshal.load(Marshal.dump(package)), active_kustomizations, active_helm_releases],
-    ["config-active with blocked outer", Marshal.load(Marshal.dump(trek_sync)), Marshal.load(Marshal.dump(package)), config_policy, config_helm_policy],
+    ["config-active with blocked outer", begin
+      blocked_outer = Marshal.load(Marshal.dump(config_outer))
+      blocked_outer["spec"]["suspend"] = true
+      blocked_outer["metadata"]["annotations"]["flux.takutk.com/activation-blocked"] = "true"
+      blocked_outer
+    end, Marshal.load(Marshal.dump(package)), config_policy, config_helm_policy],
     ["app-active with blocked inner", config_outer, Marshal.load(Marshal.dump(package)), app_policy, app_helm_policy],
-    ["app-active under suspended outer", Marshal.load(Marshal.dump(trek_sync)), app_inner, app_policy, app_helm_policy],
+    ["app-active under suspended outer", begin
+      suspended_outer = Marshal.load(Marshal.dump(config_outer))
+      suspended_outer["spec"]["suspend"] = true
+      suspended_outer["metadata"]["annotations"]["flux.takutk.com/activation-blocked"] = "true"
+      suspended_outer
+    end, app_inner, app_policy, app_helm_policy],
     ["config-active with active inner", config_outer, app_inner, config_policy, config_helm_policy]
   ]
   invalid_cases.each do |label, outer, inner, kustomizations, helm_releases|
