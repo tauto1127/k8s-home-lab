@@ -24,6 +24,8 @@ BLOCKED_ACTIVATION_OBJECTS = Set.new([
   "helm.toolkit.fluxcd.io/v2/HelmRelease/nextcloud/nextcloud",
   "external-secrets.io/v1beta1/ExternalSecret/nextcloud/nextcloud-db-secret"
 ]).freeze
+TREK_PACKAGE_PATH = "./clusters/home/packages/trek"
+TREK_ACTIVATION_BLOCKED = "true"
 KUBECTL = ENV.fetch("FLUX_OWNERSHIP_KUBECTL", "kubectl")
 CURL = ENV.fetch("FLUX_OWNERSHIP_CURL", "curl")
 FLUX = ENV.fetch("FLUX_OWNERSHIP_FLUX", "flux")
@@ -638,6 +640,25 @@ def validate_active_cluster_secret_store!(document, identity, contract, failures
   end
 end
 
+def validate_trek_preparation_kustomization!(resource, failures)
+  metadata = resource.fetch("metadata", {})
+  spec = resource.fetch("spec", {})
+  identity = "Flux Kustomization #{metadata['name']}"
+  failures << "#{identity}: TREK preparation path must be #{TREK_PACKAGE_PATH}" unless spec["path"] == TREK_PACKAGE_PATH
+  failures << "#{identity}: TREK preparation must keep prune:false" unless spec["prune"] == false
+  failures << "#{identity}: TREK preparation must keep suspend:true" unless spec["suspend"] == true
+  failures << "#{identity}: TREK preparation must depend exactly on eso-controller and eso-config" unless spec["dependsOn"] == [{"name" => "eso-controller"}, {"name" => "eso-config"}]
+  failures << "#{identity}: TREK preparation must carry activation-blocked marker" unless metadata.dig("annotations", ACTIVATION_BLOCKED) == TREK_ACTIVATION_BLOCKED
+end
+
+def validate_trek_preparation_helm_release!(resource, failures)
+  metadata = resource.fetch("metadata", {})
+  spec = resource.fetch("spec", {})
+  identity = "HelmRelease #{metadata['namespace']}/#{metadata['name']}"
+  failures << "#{identity}: TREK preparation must keep suspend:true" unless spec["suspend"] == true
+  failures << "#{identity}: TREK preparation must carry activation-blocked marker" unless metadata.dig("annotations", ACTIVATION_BLOCKED) == TREK_ACTIVATION_BLOCKED
+end
+
 def validate_eso_config_kustomization!(document, failures)
   spec = document.fetch("spec", {})
   failures << "active Kustomization eso-config: wait must be true" unless spec["wait"] == true
@@ -1178,6 +1199,7 @@ flux_entries.each do |source_path, resource|
 
   spec = resource["spec"]
   raise "Flux Kustomization #{name}: spec is missing" unless spec.is_a?(Hash)
+  validate_trek_preparation_kustomization!(resource, failures) if name == "trek" && namespace == "flux-system"
   is_bootstrap_root = bootstrap_root_id == flux_id
   if is_bootstrap_root
     root_policy = bootstrap.fetch("root")
@@ -1373,7 +1395,9 @@ package_objects.each do |_owner, entries|
   entries.each do |path, doc|
     next unless doc.is_a?(Hash) && doc["kind"] == "HelmRelease"
     id = required_identity(doc, path.to_s)
-    unless doc["spec"].is_a?(Hash)
+    if doc["spec"].is_a?(Hash)
+      validate_trek_preparation_helm_release!(doc, failures) if doc.dig("metadata", "name") == "trek" && doc.dig("metadata", "namespace") == "trek"
+    else
       failures << "HelmRelease #{id}: spec must be a mapping"
       next
     end

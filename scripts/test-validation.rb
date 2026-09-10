@@ -1679,6 +1679,35 @@ Dir.mktmpdir("flux-bootstrap-validation-test") do |temporary_root|
   assert((stdout + stderr).include?("Kustomize renderer is unavailable"), "unavailable bootstrap renderer was accepted")
 end
 
+def test_trek_preparation_contract
+  sync = YAML.load_stream(File.read(File.join(ROOT, "clusters/home/flux-system/sync.yaml")))
+  trek_sync = sync.find { |resource| resource.dig("metadata", "name") == "trek" }
+  assert(trek_sync, "TREK Flux Kustomization is missing")
+  assert(trek_sync.dig("spec", "path") == "./clusters/home/packages/trek", "TREK Flux path drifted")
+  assert(trek_sync.dig("spec", "suspend") == true, "TREK preparation must remain suspended")
+  assert(trek_sync.dig("spec", "prune") == false, "TREK preparation must keep prune:false")
+  assert(trek_sync.dig("spec", "dependsOn") == [{"name" => "eso-controller"}, {"name" => "eso-config"}], "TREK dependencies drifted")
+  assert(trek_sync.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "TREK outer activation marker is missing")
+
+  package_root = File.join(ROOT, "clusters/home/packages/trek")
+  package = YAML.load_stream(File.read(File.join(package_root, "helmrelease.yaml"))).first
+  assert(package.dig("spec", "suspend") == true, "TREK HelmRelease must remain suspended")
+  assert(package.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "TREK HelmRelease activation marker is missing")
+  assert(package.dig("spec", "chart", "spec", "version") == "4.2.1", "TREK chart version drifted")
+
+  failures = []
+  sabotaged = Marshal.load(Marshal.dump(trek_sync))
+  sabotaged["spec"]["suspend"] = false
+  validate_trek_preparation_kustomization!(sabotaged, failures)
+  assert(failures.any? { |failure| failure.include?("suspend:true") }, "TREK outer suspend safety gate did not bite")
+
+  failures = []
+  sabotaged = Marshal.load(Marshal.dump(package))
+  sabotaged["metadata"]["annotations"].delete("flux.takutk.com/activation-blocked")
+  validate_trek_preparation_helm_release!(sabotaged, failures)
+  assert(failures.any? { |failure| failure.include?("activation-blocked") }, "TREK inner activation marker safety gate did not bite")
+end
+
 def test_mortis_preparation_contract
   package_root = File.join(ROOT, "clusters/home/packages/mortis")
   package_kustomization = YAML.safe_load(File.read(File.join(package_root, "kustomization.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
@@ -1712,4 +1741,5 @@ end
 
 test_mortis_preparation_contract
 test_cumulative_activation_validation
+test_trek_preparation_contract
 puts "Validation fixtures passed."

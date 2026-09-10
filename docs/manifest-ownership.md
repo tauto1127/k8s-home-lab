@@ -62,7 +62,8 @@ PVC、PV、namespace、CRD、privileged bindingは、初回移行時に
 | `pv/test-pvc.yaml` | excluded | test PVCは現在もBoundのため、cleanupは別途storageの判断が必要。 |
 | `clusters/home/flux-system/gotk-components.yaml` | bootstrap | Flux `v2.9.3`のCRD/controller/RBAC。生成物とupstream bytesのSHA256をpolicyで検証し、公式bundleの`cluster-admin`付与を含むcluster適用は別承認とする。 |
 | `clusters/home/flux-system/gotk-sync.yaml` | bootstrap | public GitRepositoryとactive root Kustomization。rootは`flux-system/`だけをcomposeし、`packages/`を直接所有しない。 |
-| `clusters/home/flux-system/sync.yaml` | migration-pending | 4つのpackage Kustomization定義。今回のdesiredではESO controller/config/CSIが`suspend: false`、Nextcloudは`suspend: true`、全て`prune: false`。CSIは`eso-config`に依存する。 |
+| `clusters/home/flux-system/sync.yaml` | migration-pending | 5つのpackage Kustomization定義。今回のdesiredではESO controller/config/CSIが`suspend: false`、NextcloudとTREKは`suspend: true`、全て`prune: false`。CSIは`eso-config`に依存する。 |
+| `clusters/home/packages/trek/*`, `clusters/home/flux-system/sync.yaml` | migration-pending | TREK 4.2.1 preparation package。外側Kustomizationと内側HelmReleaseを停止状態で固定し、ESO controller/configに依存する。Config activationとApp activationは別Git PRで行う。 |
 | `clusters/home/packages/eso-controller/helmrelease.yaml` | flux-managed | PR #46で移行済み。初回upgrade成功、Ready、chart artifact digest一致を確認済み。 |
 
 すべてのraw `flux-candidate` packageには`kustomization.yaml`がある。Helm chartの
