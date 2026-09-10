@@ -998,11 +998,19 @@ Dir.mktmpdir("flux-reference-validation-test") do |temporary_root|
   File.write(flux_path, valid)
   assert_success("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
 
+  File.write(File.join(temporary_root, "clusters/pkg/kustomization.yaml"), "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: [release.yaml]\n")
+  FileUtils.rm_f(File.join(temporary_root, "clusters/pkg/repo.yaml"))
+  stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
+  assert((stdout + stderr).include?("GitRepository sourceRef is missing or mismatched"), "undeclared GitRepository chart source was accepted")
+
+  File.write(File.join(temporary_root, "clusters/pkg/kustomization.yaml"), "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: [repo.yaml, release.yaml]\n")
+  File.write(File.join(temporary_root, "clusters/pkg/release.yaml"), "apiVersion: helm.toolkit.fluxcd.io/v2\nkind: HelmRelease\nmetadata:\n  name: app\n  namespace: default\nspec:\n  suspend: true\n  chart:\n    spec:\n      chart: ./apps/memos/chart\n      sourceRef:\n        kind: GitRepository\n        name: flux-system\n        namespace: flux-system\n")
   File.write(File.join(temporary_root, "clusters/pkg/release.yaml"), File.read(File.join(temporary_root, "clusters/pkg/release.yaml")).sub("chart: ./apps/memos/chart", "chart: apps/memos/chart"))
   stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
   assert((stdout + stderr).include?("GitRepository chart path must be repository-relative"), "relative Git chart path without ./ was accepted")
 
-  File.write(File.join(temporary_root, "clusters/pkg/release.yaml"), File.read(File.join(temporary_root, "clusters/pkg/release.yaml")).sub("chart: apps/memos/chart", "chart: ./apps/memos/chart").sub("name: flux-system\n        namespace: flux-system", "name: other\n        namespace: flux-system"))
+  File.write(File.join(temporary_root, "clusters/pkg/repo.yaml"), "apiVersion: source.toolkit.fluxcd.io/v1\nkind: GitRepository\nmetadata:\n  name: other\n  namespace: flux-system\nspec:\n  interval: 1m\n  url: https://github.com/tauto1127/k8s-home-lab\n  ref:\n    branch: main\n")
+  File.write(File.join(temporary_root, "clusters/pkg/release.yaml"), "apiVersion: helm.toolkit.fluxcd.io/v2\nkind: HelmRelease\nmetadata:\n  name: app\n  namespace: default\nspec:\n  suspend: true\n  chart:\n    spec:\n      chart: ./apps/memos/chart\n      sourceRef:\n        kind: GitRepository\n        name: other\n        namespace: flux-system\n")
   stdout, stderr = assert_failure("ruby", File.join(ROOT, "scripts/validate-flux-ownership.rb"), temporary_root)
   assert((stdout + stderr).include?("GitRepository sourceRef must be the bootstrap flux-system source"), "non-bootstrap GitRepository chart source was accepted")
 end
