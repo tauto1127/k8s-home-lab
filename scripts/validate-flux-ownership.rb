@@ -1498,11 +1498,25 @@ package_objects.each do |_owner, entries|
       failures << "Nextcloud HelmRelease must remain suspended"
     end
     chart_ref = doc.dig("spec", "chart", "spec", "sourceRef")
-    if !chart_ref.is_a?(Hash) || chart_ref["kind"] != "HelmRepository" || chart_ref["name"].to_s.empty?
+    chart_kind = chart_ref.is_a?(Hash) ? chart_ref["kind"].to_s : ""
+    chart_name = chart_ref.is_a?(Hash) ? chart_ref["name"].to_s : ""
+    if !chart_ref.is_a?(Hash) || chart_name.empty? || !%w[HelmRepository GitRepository].include?(chart_kind)
       failures << "HelmRelease #{id}: chart.spec.sourceRef HelmRepository is required"
+    elsif chart_kind == "GitRepository"
+      if approved_active_helm_releases.include?(id)
+        failures << "active HelmRelease #{id}: GitRepository chart source is not approved"
+      else
+        ref_ns = chart_ref["namespace"] || doc.dig("metadata", "namespace").to_s
+        repo_id = ["source.toolkit.fluxcd.io/v1", "GitRepository", ref_ns.to_s, chart_name].join("/")
+        expected_git = bootstrap_source_id || "source.toolkit.fluxcd.io/v1/GitRepository/flux-system/flux-system"
+        failures << "HelmRelease #{id}: GitRepository sourceRef is missing or mismatched: #{repo_id}" unless seen_objects.key?(repo_id) || repo_id == expected_git
+        failures << "HelmRelease #{id}: GitRepository sourceRef must be the bootstrap flux-system source" unless repo_id == expected_git
+        chart_path = doc.dig("spec", "chart", "spec", "chart").to_s
+        failures << "HelmRelease #{id}: GitRepository chart path must be repository-relative and begin with ./" unless chart_path.start_with?("./")
+      end
     else
       ref_ns = chart_ref["namespace"] || doc.dig("metadata", "namespace").to_s
-      repo_id = ["source.toolkit.fluxcd.io/v1", "HelmRepository", ref_ns.to_s, chart_ref["name"]].join("/")
+      repo_id = ["source.toolkit.fluxcd.io/v1", "HelmRepository", ref_ns.to_s, chart_name].join("/")
       failures << "HelmRelease #{id}: HelmRepository sourceRef is missing or mismatched: #{repo_id}" unless seen_objects.key?(repo_id)
       if approved_active_helm_releases.include?(id)
         contract = active_helm_release_contracts.fetch(id)
