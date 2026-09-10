@@ -12,6 +12,7 @@ rootのFlux Kustomizationが作成する外側 `Kustomization/trek` は `suspend
 - Chart: `trek` 4.2.1, `https://chart.liketrek.com`
 - Image: `mauriceboe/trek:4.2.1@sha256:777f4d647e973fe7d87fecd957e854b86d57e8d977fd041763e0ca19b3c2e2c0`
 - Ingress: Kong、`trek.takutk.com/`、strip-path false。connect/read/write timeoutはHelm post-rendererでServiceに付与する
+- Cookie: Cloudflare Tunnel → Kong が HTTP origin のため `COOKIE_SECURE=false`。`FORCE_HTTPS=true` は入れない（redirect loop）
 - Data PVC: `nfs-client`, 5Gi
 - Uploads PVC: `nfs-client`, 20Gi
 - Secret: ESOが `trek-secrets` を生成する。Gitには値を置かない

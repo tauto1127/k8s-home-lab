@@ -61,6 +61,7 @@ spec:
       ALLOWED_ORIGINS: https://trek.takutk.com
       TRUST_PROXY: "2"
       FORCE_HTTPS: "false"
+      COOKIE_SECURE: "false"
       TZ: Asia/Tokyo
     existingSecret: trek-secrets
     existingSecretKey: ENCRYPTION_KEY
