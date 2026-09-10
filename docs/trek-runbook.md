@@ -2,9 +2,9 @@
 
 ## このPRの範囲
 
-このPRはTREK 4.2.1のFlux移行準備だけを行う。`main`へマージしても、TREKはインストールされず、起動せず、Helm chartもreconcileされない。
+このPRはTREK 4.2.1のconfig activationだけを行う。`main`へマージすると、TREKのNamespace、HelmRepository、ExternalSecretと停止中HelmReleaseがreconcileされるが、Helm chartはインストール・upgradeされず、アプリも起動しない。
 
-rootのFlux Kustomizationが作成するのは、停止状態の外側 `Kustomization/trek` だけである。外側は `suspend: true` と `prune: false`、内側の `HelmRelease/trek` も `suspend: true` で、両方に `flux.takutk.com/activation-blocked: "true"` を付けている。GSM、クラスター、Cloudflare DNS/TunnelはこのPRでは変更しない。
+rootのFlux Kustomizationが作成する外側 `Kustomization/trek` は `suspend: false` と `prune: false`、内側の `HelmRelease/trek` は `suspend: true` かつ `flux.takutk.com/activation-blocked: "true"` のままである。GSM secretは登録済みの前提で、クラスター、Cloudflare DNS/TunnelはこのPRでは変更しない。
 
 ## 構成
 
@@ -21,8 +21,8 @@ rootのFlux Kustomizationが作成するのは、停止状態の外側 `Kustomiz
 
 `flux resume`、imperative patch、手動reconcileは使用しない。次の3状態だけを許可し、各遷移を別のGit PRとして行う。すべての状態で外側Kustomizationの `prune: false` を維持する。
 
-1. Preparation（このPR）: 外側 `Kustomization/trek` は `suspend: true` かつactivation marker付き、内側 `HelmRelease/trek` も `suspend: true` かつmarker付き。packageはreconcileされない。
-2. Config activation PR: 次の変更を同じPRで行う。外側 `clusters/home/flux-system/sync.yaml` の `Kustomization/trek` を `suspend: false` にし、外側の `flux.takutk.com/activation-blocked: "true"` を削除する。`clusters/home/packages/trek/namespace.yaml` のNamespace `trek` から、同じactivation-blockedのlabelとannotationを両方削除する。`.github/manifest-policy.yaml` の `trekActivation.stage` を `config-active` にし、TREK Kustomizationをactive inventoryへ追加し、TREK HelmReleaseを `safety.trekStage: config-active` 付きのapproved active HelmRelease policyへ追加する。内側 `HelmRelease/trek` は `suspend: true` とmarker付きのままにする。これによりNamespace、HelmRepository、ExternalSecret、停止中HelmReleaseだけがreconcileされる。PRには、このstage transitionに必要なFlux ownership/policy/docs/testsの更新を含める。
+1. Preparation（完了）: 外側 `Kustomization/trek` と内側 `HelmRelease/trek` は停止し、両方にactivation markerを付ける。
+2. Config activation PR（このPR）: 外側 `Kustomization/trek` を `suspend: false` にし、外側markerを削除する。Namespace `trek` のlabel/annotation markerを削除し、policyのstageを `config-active` にしてTREKの外側Kustomizationと停止中HelmReleaseをapproved ownershipへ追加する。内側 `HelmRelease/trek` は `suspend: true` とmarker付きのままにする。これによりNamespace、HelmRepository、ExternalSecret、停止中HelmReleaseだけがreconcileされる。
 3. App activation PR: `clusters/home/packages/trek/helmrelease.yaml` の内側 `HelmRelease/trek` を `suspend: false` にし、内側の `flux.takutk.com/activation-blocked: "true"` を削除する。`.github/manifest-policy.yaml` の `trekActivation.stage` とTREK HelmRelease policyの `safety.trekStage` を `app-active` に更新し、必要なownership/policy/docs/testsも同じPRに含める。外側は `suspend: false`、markerなし、Namespaceもmarkerなしのままにする。
 
 外側が停止中のまま内側だけをactiveにする状態、markerとsuspendの混在、`prune: true` はCIで拒否する。GSM secret registrationはConfig activationの前提として別途実施する。LAN/KongのHost-header smoke testはCloudflareなしで実行できる。Cloudflare DNS/Tunnelは、後段のpublic HTTPS/WebSocket validationでのみ必要になる。
