@@ -1690,8 +1690,8 @@ def test_trek_activation_and_render_contract
   assert(namespace.dig("metadata", "labels", "flux.takutk.com/activation-blocked").nil?, "TREK Namespace activation label must be removed")
   assert(namespace.dig("metadata", "annotations", "flux.takutk.com/activation-blocked").nil?, "TREK Namespace activation annotation must be removed")
   package = YAML.load_stream(File.read(File.join(package_root, "helmrelease.yaml"))).first
-  assert(package.dig("spec", "suspend") == true, "TREK HelmRelease must remain suspended")
-  assert(package.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "TREK HelmRelease activation marker is missing")
+  assert(package.dig("spec", "suspend") == false, "TREK app activation must enable inner HelmRelease")
+  assert(package.dig("metadata", "annotations", "flux.takutk.com/activation-blocked").nil?, "TREK HelmRelease activation marker must be removed")
   assert(package.dig("spec", "chart", "spec", "version") == "4.2.1", "TREK chart version drifted")
   assert(package.dig("spec", "values", "image", "tag") == "4.2.1@sha256:777f4d647e973fe7d87fecd957e854b86d57e8d977fd041763e0ca19b3c2e2c0", "TREK image digest drifted")
 
@@ -1716,8 +1716,8 @@ def test_trek_activation_and_render_contract
   active_kustomizations = {outer_id => activation.fetch("activeKustomizations").find { |entry| entry["name"] == "trek" }}
   active_helm_releases = {inner_id => activation.fetch("activeHelmReleases").find { |entry| entry["name"] == "trek" }}
   failures = []
-  validate_trek_stage_state!("config-active", trek_sync, package, active_kustomizations, active_helm_releases, failures)
-  assert(failures.empty?, "TREK config-active state was rejected: #{failures.join('; ')}")
+  validate_trek_stage_state!("app-active", trek_sync, package, active_kustomizations, active_helm_releases, failures)
+  assert(failures.empty?, "TREK app-active state was rejected: #{failures.join('; ')}")
 
   config_outer = Marshal.load(Marshal.dump(trek_sync))
   config_outer["spec"]["suspend"] = false
@@ -1726,12 +1726,16 @@ def test_trek_activation_and_render_contract
   config_policy = {outer_id => {}}
   config_helm_policy = {inner_id => {}}
   config_inner = Marshal.load(Marshal.dump(package))
+  config_inner["spec"]["suspend"] = true
+  config_inner["metadata"]["annotations"] ||= {}
+  config_inner["metadata"]["annotations"]["flux.takutk.com/activation-blocked"] = "true"
   failures = []
   validate_trek_stage_state!("config-active", config_outer, config_inner, config_policy, config_helm_policy, failures)
   assert(failures.empty?, "TREK config-active state was rejected: #{failures.join('; ')}")
 
   app_inner = Marshal.load(Marshal.dump(package))
   app_inner["spec"]["suspend"] = false
+  app_inner["metadata"]["annotations"] ||= {}
   app_inner["metadata"]["annotations"].delete("flux.takutk.com/activation-blocked")
   app_policy = {outer_id => {}}
   app_helm_policy = {inner_id => {}}
@@ -1747,7 +1751,11 @@ def test_trek_activation_and_render_contract
       blocked_outer["metadata"]["annotations"]["flux.takutk.com/activation-blocked"] = "true"
       blocked_outer
     end, Marshal.load(Marshal.dump(package)), config_policy, config_helm_policy],
-    ["app-active with blocked inner", config_outer, Marshal.load(Marshal.dump(package)), app_policy, app_helm_policy],
+    ["app-active with blocked inner", config_outer, begin
+      blocked_inner = Marshal.load(Marshal.dump(app_inner))
+      blocked_inner["metadata"]["annotations"]["flux.takutk.com/activation-blocked"] = "true"
+      blocked_inner
+    end, app_policy, app_helm_policy],
     ["app-active under suspended outer", begin
       suspended_outer = Marshal.load(Marshal.dump(config_outer))
       suspended_outer["spec"]["suspend"] = true
