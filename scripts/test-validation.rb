@@ -1819,10 +1819,10 @@ def build_trek_activation_fixture(root, stage, sabotage: nil)
   trek_sync = sync.find { |resource| resource.dig("metadata", "name") == "trek" }
   trek_sync["spec"]["suspend"] = stage == "preparation"
   sync.each do |resource|
-    if ["eso-config", "csi-secrets-store", "memos", "n8n", "jellyfin"].include?(resource.dig("metadata", "name"))
+    if ["eso-config", "csi-secrets-store", "memos", "n8n", "jellyfin", "grafana"].include?(resource.dig("metadata", "name"))
       resource["spec"]["suspend"] = true
     end
-    if ["memos", "n8n", "jellyfin"].include?(resource.dig("metadata", "name"))
+    if ["memos", "n8n", "jellyfin", "grafana"].include?(resource.dig("metadata", "name"))
       resource["metadata"]["annotations"] ||= {}
       resource["metadata"]["annotations"]["flux.takutk.com/activation-blocked"] = "true"
     end
@@ -1854,6 +1854,14 @@ def build_trek_activation_fixture(root, stage, sabotage: nil)
     jellyfin_helm["metadata"]["annotations"] ||= {}
     jellyfin_helm["metadata"]["annotations"]["flux.takutk.com/activation-blocked"] = "true"
     write_yaml_stream(jellyfin_helm_path, [jellyfin_helm])
+  end
+  grafana_helm_path = File.join(root, "clusters/home/packages/grafana/helmrelease.yaml")
+  if File.exist?(grafana_helm_path)
+    grafana_helm = YAML.load_stream(File.read(grafana_helm_path)).first
+    grafana_helm["spec"]["suspend"] = true
+    grafana_helm["metadata"]["annotations"] ||= {}
+    grafana_helm["metadata"]["annotations"]["flux.takutk.com/activation-blocked"] = "true"
+    write_yaml_stream(grafana_helm_path, [grafana_helm])
   end
   trek_sync["metadata"]["annotations"] ||= {}
   if stage == "preparation"
@@ -1897,6 +1905,9 @@ def build_trek_activation_fixture(root, stage, sabotage: nil)
   end
   if policy["jellyfinActivation"]
     policy["jellyfinActivation"]["stage"] = "preparation"
+  end
+  if policy["grafanaActivation"]
+    policy["grafanaActivation"]["stage"] = "preparation"
   end
   activation = policy.fetch("fluxActivation")
   activation["phase"] = "eso-controller"
@@ -2126,6 +2137,71 @@ def test_jellyfin_preparation_contract
   assert(jellyfin.dig("spec", "dependsOn").nil?, "Jellyfin must not depend on ESO")
 end
 
+def test_grafana_preparation_contract
+  package_root = File.join(ROOT, "clusters/home/packages/grafana")
+  package_kustomization = YAML.safe_load(File.read(File.join(package_root, "kustomization.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
+  assert(package_kustomization["resources"] == ["namespace.yaml", "helmrepository.yaml", "external-secret.yaml", "helmrelease.yaml"], "Grafana package composition drifted")
+
+  helm = YAML.safe_load(File.read(File.join(package_root, "helmrelease.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
+  assert(helm.dig("spec", "suspend") == true, "Grafana HelmRelease must stay suspended at preparation")
+  assert(helm.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "Grafana HelmRelease marker must remain at preparation")
+  assert(helm.dig("spec", "install", "crds") == "Skip", "Grafana install.crds must be Skip")
+  assert(helm.dig("spec", "upgrade", "crds") == "Skip", "Grafana upgrade.crds must be Skip")
+  assert(helm.dig("spec", "chart", "spec", "chart") == "k8s-monitoring", "Grafana chart name drifted")
+  assert(helm.dig("spec", "chart", "spec", "version") == "3.5.3", "Grafana chart version drifted")
+  assert(helm.dig("spec", "chart", "spec", "sourceRef") == {
+    "kind" => "HelmRepository",
+    "name" => "grafana",
+    "namespace" => "flux-system"
+  }, "Grafana chart sourceRef drifted")
+  assert(helm.dig("spec", "releaseName") == "grafana-k8s-monitoring", "Grafana releaseName drifted")
+  destinations = helm.dig("spec", "values", "destinations")
+  assert(destinations.is_a?(Array) && destinations.map { |destination| destination["name"] } == ["grafana-cloud-metrics", "grafana-cloud-logs", "gc-otlp-endpoint"], "Grafana destination names drifted")
+  destinations.each do |destination|
+    assert(destination.dig("auth", "passwordFrom") == "grafana-external-secrets", "Grafana destination must use passwordFrom")
+    assert(destination.dig("auth", "passwordKey") == "grafana", "Grafana destination passwordKey drifted")
+    assert(!destination.dig("auth").key?("password"), "Grafana destination must not store password literals")
+  end
+  %w[alloy-metrics alloy-singleton alloy-logs alloy-receiver].each do |collector|
+    auth = helm.dig("spec", "values", collector, "remoteConfig", "auth")
+    assert(auth.is_a?(Hash) && auth["passwordFrom"] == "grafana-external-secrets", "Grafana #{collector} remoteConfig must use passwordFrom")
+    assert(!auth.key?("password"), "Grafana #{collector} remoteConfig must not store password literals")
+  end
+  assert(helm.dig("spec", "install", "disableTakeOwnership") == true, "Grafana adopt flag drifted")
+
+  repo = YAML.safe_load(File.read(File.join(package_root, "helmrepository.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
+  assert(repo.dig("spec", "url") == "https://grafana.github.io/helm-charts", "Grafana HelmRepository URL drifted")
+
+  rendered, = assert_success("kubectl", "kustomize", package_root)
+  resources = rendered.split(/^---[ \t]*(?:#.*)?$\n?/).filter_map do |document|
+    next if document.strip.empty?
+    YAML.safe_load(document, permitted_classes: [], permitted_symbols: [], aliases: false)
+  end
+  identities = resources.map { |resource| [resource["apiVersion"], resource["kind"], resource.dig("metadata", "namespace").to_s, resource.dig("metadata", "name")].join("/") }
+  assert(identities.sort == [
+    "external-secrets.io/v1beta1/ExternalSecret/grafana/grafana-external-secrets",
+    "helm.toolkit.fluxcd.io/v2/HelmRelease/grafana/grafana-k8s-monitoring",
+    "source.toolkit.fluxcd.io/v1/HelmRepository/flux-system/grafana",
+    "v1/Namespace//grafana"
+  ].sort, "Grafana package resource inventory drifted")
+  assert(resources.none? { |resource| resource["kind"] == "HelmRelease" && resource.dig("metadata", "name") != "grafana-k8s-monitoring" }, "Grafana package must not own alloy child HelmReleases")
+  namespace = resources.find { |resource| resource["kind"] == "Namespace" }
+  assert(namespace.dig("metadata", "labels", "flux.takutk.com/activation-blocked") == "true", "Grafana Namespace activation label must remain at preparation")
+  assert(namespace.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "Grafana Namespace activation annotation must remain at preparation")
+
+  sync = File.read(File.join(ROOT, "clusters/home/flux-system/sync.yaml")).split(/^---[ \t]*(?:#.*)?$\n?/).filter_map do |document|
+    next if document.strip.empty?
+    YAML.safe_load(document, permitted_classes: [], permitted_symbols: [], aliases: false)
+  end
+  grafana = sync.find { |resource| resource.dig("metadata", "name") == "grafana" }
+  assert(grafana, "Grafana Flux Kustomization is missing")
+  assert(grafana.dig("spec", "path") == "./clusters/home/packages/grafana", "Grafana Flux path drifted")
+  assert(grafana.dig("spec", "suspend") == true, "Grafana outer Kustomization must stay suspended at preparation")
+  assert(grafana.dig("spec", "prune") == false, "Grafana must keep prune:false")
+  assert(grafana.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "Grafana outer Kustomization marker must remain at preparation")
+  assert(grafana.dig("spec", "dependsOn") == [{"name" => "eso-controller"}, {"name" => "eso-config"}], "Grafana must depend on ESO")
+end
+
 def test_memos_preparation_contract
   package_root = File.join(ROOT, "clusters/home/packages/memos")
   package_kustomization = YAML.safe_load(File.read(File.join(package_root, "kustomization.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
@@ -2175,6 +2251,7 @@ end
 test_mortis_preparation_contract
 test_n8n_preparation_contract
 test_jellyfin_preparation_contract
+test_grafana_preparation_contract
 test_memos_preparation_contract
 test_cumulative_activation_validation
 test_trek_activation_and_render_contract
