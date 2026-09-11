@@ -1,0 +1,61 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: jellyfin
+  namespace: jellyfin
+  annotations:
+    flux.takutk.com/activation-blocked: "true"
+spec:
+  interval: 30m
+  timeout: 10m
+  suspend: true
+  releaseName: jellyfin
+  targetNamespace: jellyfin
+  storageNamespace: jellyfin
+  chart:
+    spec:
+      chart: jellyfin
+      version: 3.2.0
+      sourceRef:
+        kind: HelmRepository
+        name: jellyfin
+        namespace: flux-system
+      interval: 30m
+  install:
+    createNamespace: false
+    disableTakeOwnership: true
+    remediation:
+      retries: 0
+  upgrade:
+    disableTakeOwnership: true
+    remediation:
+      retries: 0
+      remediateLastFailure: false
+  uninstall:
+    keepHistory: true
+  values:
+    image:
+      repository: docker.io/jellyfin/jellyfin
+      tag: "10.11.11@sha256:0b901391a662862eddb5dc55d244d7883cbb6236ef5b9a6ea82abc78a89819f0"
+    service:
+      type: LoadBalancer
+      annotations:
+        metallb.universe.tf/loadBalancerIPs: "192.168.11.208"
+    persistence:
+      config:
+        enabled: true
+        storageClass: nfs-client
+        size: 5Gi
+      media:
+        enabled: true
+        existingClaim: jellyfin-claim
+    livenessProbe:
+      failureThreshold: 6
+      timeoutSeconds: 30
+    readinessProbe:
+      failureThreshold: 6
+      timeoutSeconds: 30
+    startupProbe:
+      httpGet:
+        path: /health
+        port: http

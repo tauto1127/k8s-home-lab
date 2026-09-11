@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jellyfin
+  labels:
+    flux.takut.dev/owner: jellyfin
+    flux.takutk.com/activation-blocked: "true"

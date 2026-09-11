@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: jellyfin-pv
+  labels:
+    app: jellyfin
+spec:
+  capacity:
+    storage: 6Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  nfs:
+    path: /mnt/md0
+    server: 192.168.11.9
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jellyfin-claim
+  namespace: jellyfin
+  labels:
+    io.kompose.service: jellyfin-claim
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 6Gi
+  volumeName: jellyfin-pv
+  storageClassName: ""
