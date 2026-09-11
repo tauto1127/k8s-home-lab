@@ -2058,6 +2058,60 @@ def test_n8n_preparation_contract
   assert(n8n.dig("spec", "dependsOn") == [{"name" => "eso-controller"}, {"name" => "eso-config"}], "n8n must depend on ESO")
 end
 
+def test_jellyfin_preparation_contract
+  package_root = File.join(ROOT, "clusters/home/packages/jellyfin")
+  package_kustomization = YAML.safe_load(File.read(File.join(package_root, "kustomization.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
+  assert(package_kustomization["resources"] == ["namespace.yaml", "helmrepository.yaml", "pvc.yaml", "helmrelease.yaml"], "Jellyfin package composition drifted")
+
+  helm = YAML.safe_load(File.read(File.join(package_root, "helmrelease.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
+  assert(helm.dig("spec", "suspend") == true, "Jellyfin HelmRelease must remain suspended at preparation")
+  assert(helm.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "Jellyfin HelmRelease must stay activation-blocked at preparation")
+  assert(helm.dig("spec", "chart", "spec", "chart") == "jellyfin", "Jellyfin chart name drifted")
+  assert(helm.dig("spec", "chart", "spec", "version") == "3.2.0", "Jellyfin chart version drifted")
+  assert(helm.dig("spec", "chart", "spec", "sourceRef") == {
+    "kind" => "HelmRepository",
+    "name" => "jellyfin",
+    "namespace" => "flux-system"
+  }, "Jellyfin chart sourceRef drifted")
+  assert(helm.dig("spec", "values", "image", "tag") == "10.11.11@sha256:0b901391a662862eddb5dc55d244d7883cbb6236ef5b9a6ea82abc78a89819f0", "Jellyfin image pin drifted")
+  assert(helm.dig("spec", "values", "service", "annotations", "metallb.universe.tf/loadBalancerIPs") == "192.168.11.208", "Jellyfin MetalLB IP drifted")
+  assert(helm.dig("spec", "install", "disableTakeOwnership") == true, "Jellyfin adopt flag drifted")
+  assert(helm.dig("spec", "values", "persistence", "media", "existingClaim") == "jellyfin-claim", "Jellyfin media claim drifted")
+  assert(helm.dig("spec", "values", "persistence", "config", "storageClass") == "nfs-client", "Jellyfin config storageClass drifted")
+
+  repo = YAML.safe_load(File.read(File.join(package_root, "helmrepository.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
+  assert(repo.dig("spec", "url") == "https://jellyfin.github.io/jellyfin-helm", "Jellyfin HelmRepository URL drifted")
+
+  rendered, = assert_success("kubectl", "kustomize", package_root)
+  resources = rendered.split(/^---[ \t]*(?:#.*)?$\n?/).filter_map do |document|
+    next if document.strip.empty?
+    YAML.safe_load(document, permitted_classes: [], permitted_symbols: [], aliases: false)
+  end
+  identities = resources.map { |resource| [resource["apiVersion"], resource["kind"], resource.dig("metadata", "namespace").to_s, resource.dig("metadata", "name")].join("/") }
+  assert(identities == [
+    "v1/Namespace//jellyfin",
+    "v1/PersistentVolume//jellyfin-pv",
+    "v1/PersistentVolumeClaim/jellyfin/jellyfin-claim",
+    "helm.toolkit.fluxcd.io/v2/HelmRelease/jellyfin/jellyfin",
+    "source.toolkit.fluxcd.io/v1/HelmRepository/flux-system/jellyfin"
+  ], "Jellyfin package resource inventory drifted")
+  assert(resources.none? { |resource| resource.dig("metadata", "name") == "jellyfin-config" }, "Helm-owned jellyfin-config PVC must not be in the Flux package")
+  namespace = resources.find { |resource| resource["kind"] == "Namespace" }
+  assert(namespace.dig("metadata", "labels", "flux.takutk.com/activation-blocked") == "true", "Jellyfin Namespace must stay activation-blocked at preparation")
+
+  sync = File.read(File.join(ROOT, "clusters/home/flux-system/sync.yaml")).split(/^---[ \t]*(?:#.*)?$\n?/).filter_map do |document|
+    next if document.strip.empty?
+    YAML.safe_load(document, permitted_classes: [], permitted_symbols: [], aliases: false)
+  end
+  jellyfin = sync.find { |resource| resource.dig("metadata", "name") == "jellyfin" }
+  assert(jellyfin, "Jellyfin Flux Kustomization is missing")
+  assert(jellyfin.dig("spec", "path") == "./clusters/home/packages/jellyfin", "Jellyfin Flux path drifted")
+  assert(jellyfin.dig("spec", "suspend") == true, "Jellyfin preparation must remain suspended")
+  assert(jellyfin.dig("spec", "prune") == false, "Jellyfin preparation must keep prune:false")
+  assert(jellyfin.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "Jellyfin outer Kustomization must stay activation-blocked")
+  assert(jellyfin.dig("spec", "dependsOn").nil?, "Jellyfin must not depend on ESO")
+end
+
 def test_memos_preparation_contract
   package_root = File.join(ROOT, "clusters/home/packages/memos")
   package_kustomization = YAML.safe_load(File.read(File.join(package_root, "kustomization.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
@@ -2106,6 +2160,7 @@ end
 
 test_mortis_preparation_contract
 test_n8n_preparation_contract
+test_jellyfin_preparation_contract
 test_memos_preparation_contract
 test_cumulative_activation_validation
 test_trek_activation_and_render_contract
