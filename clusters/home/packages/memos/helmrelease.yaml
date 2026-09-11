@@ -18,6 +18,7 @@ spec:
         name: flux-system
         namespace: flux-system
       interval: 30m
+      reconcileStrategy: Revision
   install:
     createNamespace: false
     crds: Skip

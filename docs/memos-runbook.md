@@ -17,6 +17,7 @@ merge すると Flux が既存 Helm release を adopt し、Helm reconcile が�
 - Secret / ExternalSecret: なし
 
 HelmRelease の chart source は bootstrap `GitRepository/flux-system`。HelmRepository は作らない。
+in-repo chart は `chart.spec.reconcileStrategy: Revision` にする。省略時は ChartVersion になり、Chart.yaml を上げない template 変更が取り込まれない。
 
 ## 有効化
 
