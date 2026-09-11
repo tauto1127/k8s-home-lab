@@ -34,8 +34,8 @@ PVC、PV、namespace、CRD、privileged bindingは、初回移行時に
 | `apps/immich/*.yaml` | flux-candidate | 削除した`.env`とinspector Podは対象外。machine-learningの`release` tagは、image parityを確認するまでpolicy exceptionとして残す。 |
 | `apps/jellyfin/jellyfin-pvc.yaml`, `kustomization.yaml` | flux-candidate | PVCの削除保護が必要。 |
 | `apps/jellyfin/helmfile.yaml` | migration-pending | render結果とlive resourceを比較してから変換する。 |
-| `apps/memos/chart/**`, `apps/memos/helmfile.yaml` | migration-pending | local chartはCIでlintとrenderを行っている。Flux HelmReleaseへ変換済みだが、activationまでhelmfileを正本として残す。 |
-| `clusters/home/packages/memos/*`, `clusters/home/flux-system/sync.yaml` | migration-pending | Memos preparation package。外側Kustomizationと内側HelmReleaseは両方`suspend: true`、`prune: false`、activation-blocked。chartは`GitRepository/flux-system`の`./apps/memos/chart`。Activationは別PR。 |
+| `apps/memos/chart/**`, `apps/memos/helmfile.yaml` | migration-pending | local chartはCIでlintとrenderを行っている。正本はFlux HelmRelease。helmfileはReady後の別PRでarchiveする。 |
+| `clusters/home/packages/memos/*`, `clusters/home/flux-system/sync.yaml` | migration-pending | Memos app-active package。外側Kustomizationと内側HelmReleaseは両方`suspend: false`、`prune: false`。chartは`GitRepository/flux-system`の`./apps/memos/chart`。既存Helm releaseを`disableTakeOwnership: true`でadoptする。helmfile archiveはReady後の別PR。 |
 | `apps/metube/*.yaml`, `apps/mortis/*.yaml` | flux-candidate | raw workload package。 |
 | `clusters/home/packages/mortis/*`, `clusters/home/flux-system/sync.yaml` | migration-pending | Mortis preparation package。live parity確認済み、初回は`suspend: true`・`prune: false`。Activationは別PR。MemosのServiceを参照するが所有しない。 |
 | `apps/n8n/test-pvc.yaml`, `kustomization.yaml` | flux-candidate | ファイル名に反して、Helm releaseが参照するliveのn8n PVC 3個を定義している。 |
@@ -63,7 +63,7 @@ PVC、PV、namespace、CRD、privileged bindingは、初回移行時に
 | `pv/test-pvc.yaml` | excluded | test PVCは現在もBoundのため、cleanupは別途storageの判断が必要。 |
 | `clusters/home/flux-system/gotk-components.yaml` | bootstrap | Flux `v2.9.3`のCRD/controller/RBAC。生成物とupstream bytesのSHA256をpolicyで検証し、公式bundleの`cluster-admin`付与を含むcluster適用は別承認とする。 |
 | `clusters/home/flux-system/gotk-sync.yaml` | bootstrap | public GitRepositoryとactive root Kustomization。rootは`flux-system/`だけをcomposeし、`packages/`を直接所有しない。 |
-| `clusters/home/flux-system/sync.yaml` | migration-pending | 7つのpackage Kustomization定義。今回のdesiredではESO controller/config/CSIとTREK外側Kustomizationが`suspend: false`、NextcloudとMortisとMemosは`suspend: true`、全て`prune: false`。CSIは`eso-config`に、TREKはESO controller/configに依存する。 |
+| `clusters/home/flux-system/sync.yaml` | migration-pending | 7つのpackage Kustomization定義。今回のdesiredではESO controller/config/CSIとTREKとMemosの外側Kustomizationが`suspend: false`、NextcloudとMortisは`suspend: true`、全て`prune: false`。CSIは`eso-config`に、TREKはESO controller/configに依存する。 |
 | `clusters/home/packages/trek/*`, `clusters/home/flux-system/sync.yaml` | migration-pending | TREK 4.2.1 app-active package。Namespace、HelmRepository、ExternalSecretと稼働中HelmReleaseを外側Kustomizationが所有する。外側Kustomizationは`suspend: false`、`prune: false`で、内側HelmReleaseも`suspend: false`とする。 |
 | `clusters/home/packages/eso-controller/helmrelease.yaml` | flux-managed | PR #46で移行済み。初回upgrade成功、Ready、chart artifact digest一致を確認済み。 |
 
