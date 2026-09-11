@@ -2,8 +2,10 @@
 
 ## このPRの範囲
 
-Jellyfin の **preparation** だけ。クラスタ apply、`flux resume`、手動 reconcile はしない。
-merge しても起動しない。
+Jellyfin の **config activation**。外側 `Kustomization/jellyfin` だけ `suspend: false`。
+merge すると Namespace / HelmRepository / media PV・PVC / 停止中 HelmRelease が reconcile される。
+内側 HelmRelease は `suspend: true` のままなので、Helm upgrade は始まらない。
+クラスタへの手動 apply、`flux resume`、手動 reconcile はしない。
 
 ## 構成（ライブ照合 2026-09-11）
 
@@ -26,8 +28,8 @@ merge しても起動しない。
 
 `prune: false` を維持する。CLI resume は使わない。
 
-1. Preparation（このPR）: 外側 `Kustomization/jellyfin` と内側 `HelmRelease/jellyfin` を両方 `suspend: true`、両方に `flux.takutk.com/activation-blocked: "true"`。
-2. Config activation（別PR）: 外側だけ `suspend: false`、外側 marker と Namespace marker を外す。内側は `suspend: true` と marker 付き。
+1. Preparation（完了）
+2. Config activation（このPR）: 外側だけ `suspend: false`、外側 marker と Namespace marker を外す。内側は `suspend: true` と marker 付き。`jellyfinActivation.stage` は `config-active`。
 3. App activation（別PR）: 内側 `suspend: false`、内側 marker を外す。`disableTakeOwnership: true` で既存 Helm release を adopt する。helmfile は Ready 後の別PRで archive する。
 
 ## ロールバック

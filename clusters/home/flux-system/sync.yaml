@@ -154,15 +154,13 @@ kind: Kustomization
 metadata:
   name: jellyfin
   namespace: flux-system
-  annotations:
-    flux.takutk.com/activation-blocked: "true"
 spec:
   interval: 30m
   retryInterval: 2m
   timeout: 10m
   path: ./clusters/home/packages/jellyfin
   prune: false
-  suspend: true
+  suspend: false
   wait: true
   sourceRef:
     kind: GitRepository

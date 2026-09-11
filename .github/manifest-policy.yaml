@@ -68,6 +68,10 @@ n8nActivation:
   stage: app-active
   reason: n8n app activation adopts the existing Helm release after the outer Kustomization and OCI chart contract were verified.
 
+jellyfinActivation:
+  stage: config-active
+  reason: Jellyfin config activation reconciles Namespace, HelmRepository, media PV/PVC, and a still-suspended HelmRelease. Chart install remains a later app-active PR.
+
 fluxActivation:
   phase: csi-secrets-store
   reason: Keep the adopted ESO controller and ClusterSecretStore active, then adopt only the existing CSI Helm release after its read-only preflight; keep Nextcloud suspended.
@@ -180,6 +184,32 @@ fluxActivation:
           kind: HelmRelease
           namespace: n8n
           name: n8n
+    - apiVersion: kustomize.toolkit.fluxcd.io/v1
+      kind: Kustomization
+      namespace: flux-system
+      name: jellyfin
+      path: ./clusters/home/packages/jellyfin
+      inventory:
+        - apiVersion: v1
+          kind: Namespace
+          namespace: ""
+          name: jellyfin
+        - apiVersion: source.toolkit.fluxcd.io/v1
+          kind: HelmRepository
+          namespace: flux-system
+          name: jellyfin
+        - apiVersion: v1
+          kind: PersistentVolume
+          namespace: ""
+          name: jellyfin-pv
+        - apiVersion: v1
+          kind: PersistentVolumeClaim
+          namespace: jellyfin
+          name: jellyfin-claim
+        - apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          namespace: jellyfin
+          name: jellyfin
   activeHelmReleases:
     - apiVersion: helm.toolkit.fluxcd.io/v2
       kind: HelmRelease
@@ -338,6 +368,26 @@ fluxActivation:
           url: oci://8gears.container-registry.com/library
       safety:
         activationStage: app-active
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      namespace: jellyfin
+      name: jellyfin
+      owner:
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        namespace: flux-system
+        name: jellyfin
+      chart:
+        name: jellyfin
+        version: 3.2.0
+        repository:
+          apiVersion: source.toolkit.fluxcd.io/v1
+          kind: HelmRepository
+          namespace: flux-system
+          name: jellyfin
+          url: https://jellyfin.github.io/jellyfin-helm
+      safety:
+        activationStage: config-active
 
 fluxBootstrap:
   reason: Pin the zero-Flux installation inputs and keep bootstrap/root ownership distinct from suspended workload packages.
