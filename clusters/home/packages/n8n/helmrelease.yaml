@@ -3,12 +3,10 @@ kind: HelmRelease
 metadata:
   name: n8n
   namespace: n8n
-  annotations:
-    flux.takutk.com/activation-blocked: "true"
 spec:
   interval: 30m
   timeout: 10m
-  suspend: true
+  suspend: false
   releaseName: n8n
   targetNamespace: n8n
   storageNamespace: n8n
@@ -23,10 +21,12 @@ spec:
       interval: 30m
   install:
     createNamespace: false
+    crds: Skip
     disableTakeOwnership: true
     remediation:
       retries: 0
   upgrade:
+    crds: Skip
     disableTakeOwnership: true
     remediation:
       retries: 0

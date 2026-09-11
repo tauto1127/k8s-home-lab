@@ -2,9 +2,8 @@
 
 ## このPRの範囲
 
-n8n の **config activation**。外側 `Kustomization/n8n` だけ `suspend: false`。
-merge すると Namespace / HelmRepository / PVC / 停止中 HelmRelease が reconcile される。
-内側 HelmRelease は `suspend: true` のままなので、Helm upgrade は始まらない。
+n8n の **app activation**。内側 `HelmRelease/n8n` を `suspend: false` にする。
+merge すると Flux が既存 Helm release を adopt し、Helm reconcile が始まる。
 クラスタへの手動 apply、`flux resume`、手動 reconcile はしない。
 
 ## 構成（ライブ照合 2026-09-11）
@@ -30,8 +29,8 @@ merge すると Namespace / HelmRepository / PVC / 停止中 HelmRelease が rec
 `prune: false` を維持する。CLI resume は使わない。
 
 1. Preparation（完了）
-2. Config activation（このPR）: 外側だけ `suspend: false`、外側 marker と Namespace marker を外す。内側は `suspend: true` と marker 付き。`n8nActivation.stage` は `config-active`。
-3. App activation（別PR）: 内側 `suspend: false`、内側 marker を外す。`disableTakeOwnership: true` で既存 Helm release を adopt する。helmfile は Ready 後の別PRで archive する。
+2. Config activation（完了）
+3. App activation（このPR）: 内側 `suspend: false`、内側 marker を外す。`disableTakeOwnership: true` で既存 Helm release を adopt する。`safety.activationStage` は `app-active`。helmfile は Ready 後の別PRで archive する。
 
 ## ロールバック
 

@@ -65,8 +65,8 @@ memosActivation:
   reason: Memos app activation adopts the existing Helm release after the outer Kustomization and Git chart contract were verified.
 
 n8nActivation:
-  stage: config-active
-  reason: n8n config activation reconciles Namespace, HelmRepository, PVCs, and a still-suspended HelmRelease. Chart install remains a later app-active PR.
+  stage: app-active
+  reason: n8n app activation adopts the existing Helm release after the outer Kustomization and OCI chart contract were verified.
 
 fluxActivation:
   phase: csi-secrets-store
@@ -337,7 +337,7 @@ fluxActivation:
           name: n8n
           url: oci://8gears.container-registry.com/library
       safety:
-        activationStage: config-active
+        activationStage: app-active
 
 fluxBootstrap:
   reason: Pin the zero-Flux installation inputs and keep bootstrap/root ownership distinct from suspended workload packages.

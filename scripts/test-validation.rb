@@ -2005,8 +2005,10 @@ def test_n8n_preparation_contract
   assert(package_kustomization["resources"] == ["namespace.yaml", "helmrepository.yaml", "pvc.yaml", "helmrelease.yaml"], "n8n package composition drifted")
 
   helm = YAML.safe_load(File.read(File.join(package_root, "helmrelease.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
-  assert(helm.dig("spec", "suspend") == true, "n8n HelmRelease must remain suspended at config-active")
-  assert(helm.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "n8n HelmRelease must stay activation-blocked at config-active")
+  assert(helm.dig("spec", "suspend") == false, "n8n HelmRelease must run at app-active")
+  assert(helm.dig("metadata", "annotations", "flux.takutk.com/activation-blocked").nil?, "n8n HelmRelease marker must be removed at app-active")
+  assert(helm.dig("spec", "install", "crds") == "Skip", "n8n install.crds must be Skip")
+  assert(helm.dig("spec", "upgrade", "crds") == "Skip", "n8n upgrade.crds must be Skip")
   assert(helm.dig("spec", "chart", "spec", "chart") == "n8n", "n8n chart name drifted")
   assert(helm.dig("spec", "chart", "spec", "version") == "1.0.7", "n8n chart version drifted")
   assert(helm.dig("spec", "chart", "spec", "sourceRef") == {
