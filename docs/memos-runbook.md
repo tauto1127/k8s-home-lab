@@ -2,8 +2,9 @@
 
 ## このPRの範囲
 
-Memos の **preparation** だけ。クラスタ apply、`flux resume`、手動 reconcile はしない。
-merge しても起動しない。
+Memos の **app activation**。内側 `HelmRelease/memos` を `suspend: false` にする。
+merge すると Flux が既存 Helm release を adopt し、Helm reconcile が始まる。
+クラスタへの手動 apply、`flux resume`、手動 reconcile はしない。
 
 ## 構成（ライブ照合 2026-09-10）
 
@@ -16,14 +17,15 @@ merge しても起動しない。
 - Secret / ExternalSecret: なし
 
 HelmRelease の chart source は bootstrap `GitRepository/flux-system`。HelmRepository は作らない。
+in-repo chart は `chart.spec.reconcileStrategy: Revision` にする。省略時は ChartVersion になり、Chart.yaml を上げない template 変更が取り込まれない。
 
 ## 有効化
 
 `prune: false` を維持する。CLI resume は使わない。
 
-1. Preparation（完了）: 外側 `Kustomization/memos` と内側 `HelmRelease/memos` を両方 `suspend: true`、両方に `flux.takutk.com/activation-blocked: "true"`。
-2. Config activation（このPR）: 外側だけ `suspend: false`、外側 marker と Namespace marker を外す。内側は `suspend: true` と marker 付き。`memosActivation.stage` は `config-active`。
-3. App activation（別PR）: 内側 `suspend: false`、内側 marker を外す。`disableTakeOwnership: true` で既存 Helm release を adopt する。PVC は既存 `memos` を使う。同じPRで `safety.activationStage` を `app-active` にする。helmfile は Ready 後の別PRで archive する。
+1. Preparation（完了）
+2. Config activation（完了）
+3. App activation（このPR）: 内側 `suspend: false`、内側 marker を外す。`disableTakeOwnership: true` で既存 Helm release を adopt する。`safety.activationStage` は `app-active`。helmfile は Ready 後の別PRで archive する。
 
 ## ロールバック
 

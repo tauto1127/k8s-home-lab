@@ -61,8 +61,8 @@ trekActivation:
   reason: TREK app activation enables the approved inner HelmRelease after configuration and GSM secret sync were verified.
 
 memosActivation:
-  stage: config-active
-  reason: Memos config activation reconciles Namespace and a still-suspended HelmRelease. Chart install remains a later app-active PR.
+  stage: app-active
+  reason: Memos app activation adopts the existing Helm release after the outer Kustomization and Git chart contract were verified.
 
 fluxActivation:
   phase: csi-secrets-store
@@ -283,7 +283,7 @@ fluxActivation:
           namespace: flux-system
           name: flux-system
       safety:
-        activationStage: config-active
+        activationStage: app-active
 
 fluxBootstrap:
   reason: Pin the zero-Flux installation inputs and keep bootstrap/root ownership distinct from suspended workload packages.
