@@ -656,14 +656,21 @@ def validate_activation_phase_contract!(activation, failures)
     actual = activation[key]
     if %w[activeKustomizations activeHelmReleases].include?(key)
       actual = Array(actual).reject do |entry|
-        entry.is_a?(Hash) && [
-          ["flux-system", "trek"],
-          ["trek", "trek"],
-          ["flux-system", "memos"],
-          ["memos", "memos"],
-          ["flux-system", "n8n"],
-          ["n8n", "n8n"]
-        ].include?([entry["namespace"], entry["name"]])
+        next false unless entry.is_a?(Hash)
+        pair = [entry["namespace"], entry["name"]]
+        if key == "activeKustomizations"
+          [
+            ["flux-system", "trek"],
+            ["flux-system", "memos"],
+            ["flux-system", "n8n"]
+          ].include?(pair)
+        else
+          [
+            ["trek", "trek"],
+            ["memos", "memos"],
+            ["n8n", "n8n"]
+          ].include?(pair)
+        end
       end
     end
     unless actual == expected
