@@ -963,7 +963,7 @@ def validate_activation_chart_policy!(policy, identity, failures, artifact_cache
   }
 end
 
-def validate_active_helm_release_safety(document, identity, contract, failures)
+def validate_active_helm_release_safety(document, identity, contract, failures, memos_stage: nil, trek_stage: nil)
   spec = document["spec"]
   unless spec.is_a?(Hash)
     failures << "active HelmRelease #{identity}: spec must be a mapping"
@@ -978,7 +978,14 @@ def validate_active_helm_release_safety(document, identity, contract, failures)
   }.each do |field, expected|
     failures << "active HelmRelease #{identity}: spec.#{field} must be #{expected}" unless spec[field] == expected
   end
-  return if contract["trekStage"] == "config-active" || contract["activationStage"] == "config-active"
+  config_bypass = (contract["trekStage"] == "config-active" || contract["activationStage"] == "config-active") && spec["suspend"] == true
+  if identity == "helm.toolkit.fluxcd.io/v2/HelmRelease/memos/memos"
+    config_bypass &&= memos_stage == "config-active"
+  end
+  if identity == "helm.toolkit.fluxcd.io/v2/HelmRelease/trek/trek"
+    config_bypass &&= trek_stage == "config-active"
+  end
+  return if config_bypass
   %w[install upgrade].each do |action|
     action_spec = spec[action]
     unless action_spec.is_a?(Hash)
@@ -1618,7 +1625,7 @@ package_objects.each do |_owner, entries|
       unless doc.dig("spec", "suspend") == false || (suspended_config_stage && config_active_release.call(id))
         failures << "approved active HelmRelease #{id}: suspend must be false"
       end
-      validate_active_helm_release_safety(doc, id, contract, failures)
+      validate_active_helm_release_safety(doc, id, contract, failures, memos_stage: memos_activation_stage, trek_stage: trek_activation_stage)
       chart_spec = doc.dig("spec", "chart", "spec")
       unless chart_spec.is_a?(Hash) && chart_spec["chart"] == contract["chartName"]
         failures << "active HelmRelease #{id}: chart name must be #{contract['chartName']}"
