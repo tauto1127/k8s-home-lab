@@ -1815,6 +1815,14 @@ def build_trek_activation_fixture(root, stage, sabotage: nil)
   csi_helm = YAML.load_stream(File.read(csi_helm_path)).first
   csi_helm["spec"]["suspend"] = true
   write_yaml_stream(csi_helm_path, [csi_helm])
+  memos_helm_path = File.join(root, "clusters/home/packages/memos/helmrelease.yaml")
+  if File.exist?(memos_helm_path)
+    memos_helm = YAML.load_stream(File.read(memos_helm_path)).first
+    memos_helm["spec"]["suspend"] = true
+    memos_helm["metadata"]["annotations"] ||= {}
+    memos_helm["metadata"]["annotations"]["flux.takutk.com/activation-blocked"] = "true"
+    write_yaml_stream(memos_helm_path, [memos_helm])
+  end
   trek_sync["metadata"]["annotations"] ||= {}
   if stage == "preparation"
     trek_sync["metadata"]["annotations"]["flux.takutk.com/activation-blocked"] = "true"
@@ -1970,8 +1978,10 @@ def test_memos_preparation_contract
   assert(package_kustomization["resources"] == ["namespace.yaml", "helmrelease.yaml"], "Memos package composition drifted")
 
   helm = YAML.safe_load(File.read(File.join(package_root, "helmrelease.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
-  assert(helm.dig("spec", "suspend") == true, "Memos HelmRelease must remain suspended at config-active")
-  assert(helm.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "Memos HelmRelease must stay activation-blocked at config-active")
+  assert(helm.dig("spec", "suspend") == false, "Memos HelmRelease must run at app-active")
+  assert(helm.dig("metadata", "annotations", "flux.takutk.com/activation-blocked").nil?, "Memos HelmRelease marker must be removed at app-active")
+  assert(helm.dig("spec", "install", "crds") == "Skip", "Memos install.crds must be Skip")
+  assert(helm.dig("spec", "upgrade", "crds") == "Skip", "Memos upgrade.crds must be Skip")
   assert(helm.dig("spec", "chart", "spec", "chart") == "./apps/memos/chart", "Memos chart path drifted")
   assert(helm.dig("spec", "chart", "spec", "sourceRef") == {
     "kind" => "GitRepository",
@@ -2002,9 +2012,9 @@ def test_memos_preparation_contract
   memos = sync.find { |resource| resource.dig("metadata", "name") == "memos" }
   assert(memos, "Memos Flux Kustomization is missing")
   assert(memos.dig("spec", "path") == "./clusters/home/packages/memos", "Memos Flux path drifted")
-  assert(memos.dig("spec", "suspend") == false, "Memos config-active outer Kustomization must run")
-  assert(memos.dig("spec", "prune") == false, "Memos preparation must keep prune:false")
-  assert(memos.dig("metadata", "annotations", "flux.takutk.com/activation-blocked").nil?, "Memos outer Kustomization marker must be removed at config-active")
+  assert(memos.dig("spec", "suspend") == false, "Memos outer Kustomization must run")
+  assert(memos.dig("spec", "prune") == false, "Memos must keep prune:false")
+  assert(memos.dig("metadata", "annotations", "flux.takutk.com/activation-blocked").nil?, "Memos outer Kustomization marker must stay removed")
 end
 
 test_mortis_preparation_contract

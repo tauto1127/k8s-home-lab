@@ -3,12 +3,10 @@ kind: HelmRelease
 metadata:
   name: memos
   namespace: memos
-  annotations:
-    flux.takutk.com/activation-blocked: "true"
 spec:
   interval: 30m
   timeout: 10m
-  suspend: true
+  suspend: false
   releaseName: memos
   targetNamespace: memos
   storageNamespace: memos
@@ -22,10 +20,12 @@ spec:
       interval: 30m
   install:
     createNamespace: false
+    crds: Skip
     disableTakeOwnership: true
     remediation:
       retries: 0
   upgrade:
+    crds: Skip
     disableTakeOwnership: true
     remediation:
       retries: 0
