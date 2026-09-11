@@ -1803,8 +1803,12 @@ def build_trek_activation_fixture(root, stage, sabotage: nil)
   trek_sync = sync.find { |resource| resource.dig("metadata", "name") == "trek" }
   trek_sync["spec"]["suspend"] = stage == "preparation"
   sync.each do |resource|
-    if ["eso-config", "csi-secrets-store"].include?(resource.dig("metadata", "name"))
+    if ["eso-config", "csi-secrets-store", "memos"].include?(resource.dig("metadata", "name"))
       resource["spec"]["suspend"] = true
+    end
+    if resource.dig("metadata", "name") == "memos"
+      resource["metadata"]["annotations"] ||= {}
+      resource["metadata"]["annotations"]["flux.takutk.com/activation-blocked"] = "true"
     end
   end
   csi_helm_path = File.join(root, "clusters/home/packages/csi-secrets-store/helmrelease.yaml")
@@ -1845,6 +1849,9 @@ def build_trek_activation_fixture(root, stage, sabotage: nil)
   policy_path = File.join(root, ".github/manifest-policy.yaml")
   policy = YAML.safe_load(File.read(policy_path))
   policy["trekActivation"]["stage"] = stage
+  if policy["memosActivation"]
+    policy["memosActivation"]["stage"] = "preparation"
+  end
   activation = policy.fetch("fluxActivation")
   activation["phase"] = "eso-controller"
   activation["activeKustomizations"] = activation["activeKustomizations"].select { |entry| entry["name"] == "eso-controller" }
@@ -1963,8 +1970,8 @@ def test_memos_preparation_contract
   assert(package_kustomization["resources"] == ["namespace.yaml", "helmrelease.yaml"], "Memos package composition drifted")
 
   helm = YAML.safe_load(File.read(File.join(package_root, "helmrelease.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
-  assert(helm.dig("spec", "suspend") == true, "Memos HelmRelease must remain suspended")
-  assert(helm.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "Memos HelmRelease must stay activation-blocked")
+  assert(helm.dig("spec", "suspend") == true, "Memos HelmRelease must remain suspended at config-active")
+  assert(helm.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "Memos HelmRelease must stay activation-blocked at config-active")
   assert(helm.dig("spec", "chart", "spec", "chart") == "./apps/memos/chart", "Memos chart path drifted")
   assert(helm.dig("spec", "chart", "spec", "sourceRef") == {
     "kind" => "GitRepository",
@@ -1984,6 +1991,9 @@ def test_memos_preparation_contract
   end
   identities = resources.map { |resource| [resource["apiVersion"], resource["kind"], resource.dig("metadata", "namespace").to_s, resource.dig("metadata", "name")].join("/") }
   assert(identities == ["v1/Namespace//memos", "helm.toolkit.fluxcd.io/v2/HelmRelease/memos/memos"], "Memos package resource inventory drifted")
+  namespace = resources.find { |resource| resource["kind"] == "Namespace" }
+  assert(namespace.dig("metadata", "labels", "flux.takutk.com/activation-blocked").nil?, "Memos Namespace activation label must be removed")
+  assert(namespace.dig("metadata", "annotations", "flux.takutk.com/activation-blocked").nil?, "Memos Namespace activation annotation must be removed")
 
   sync = File.read(File.join(ROOT, "clusters/home/flux-system/sync.yaml")).split(/^---[ \t]*(?:#.*)?$\n?/).filter_map do |document|
     next if document.strip.empty?
@@ -1992,9 +2002,9 @@ def test_memos_preparation_contract
   memos = sync.find { |resource| resource.dig("metadata", "name") == "memos" }
   assert(memos, "Memos Flux Kustomization is missing")
   assert(memos.dig("spec", "path") == "./clusters/home/packages/memos", "Memos Flux path drifted")
-  assert(memos.dig("spec", "suspend") == true, "Memos preparation must remain suspended")
+  assert(memos.dig("spec", "suspend") == false, "Memos config-active outer Kustomization must run")
   assert(memos.dig("spec", "prune") == false, "Memos preparation must keep prune:false")
-  assert(memos.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "Memos outer Kustomization must stay activation-blocked")
+  assert(memos.dig("metadata", "annotations", "flux.takutk.com/activation-blocked").nil?, "Memos outer Kustomization marker must be removed at config-active")
 end
 
 test_mortis_preparation_contract

@@ -21,9 +21,9 @@ HelmRelease の chart source は bootstrap `GitRepository/flux-system`。HelmRep
 
 `prune: false` を維持する。CLI resume は使わない。
 
-1. Preparation（このPR）: 外側 `Kustomization/memos` と内側 `HelmRelease/memos` を両方 `suspend: true`、両方に `flux.takutk.com/activation-blocked: "true"`。
-2. Config activation（別PR）: 外側だけ `suspend: false`、外側 marker を外す。内側は停止のまま。
-3. App activation（別PR）: 内側 `suspend: false`、内側 marker を外す。`disableTakeOwnership: true` で既存 Helm release を adopt する。PVC は既存 `memos` を使う。同じPRで `fluxActivation.activeHelmReleases` に GitRepository chart 契約（`path: ./apps/memos/chart` と `filesSha256`）を追加する。helmfile は Ready 後の別PRで archive する。
+1. Preparation（完了）: 外側 `Kustomization/memos` と内側 `HelmRelease/memos` を両方 `suspend: true`、両方に `flux.takutk.com/activation-blocked: "true"`。
+2. Config activation（このPR）: 外側だけ `suspend: false`、外側 marker と Namespace marker を外す。内側は `suspend: true` と marker 付き。`memosActivation.stage` は `config-active`。
+3. App activation（別PR）: 内側 `suspend: false`、内側 marker を外す。`disableTakeOwnership: true` で既存 Helm release を adopt する。PVC は既存 `memos` を使う。同じPRで `safety.activationStage` を `app-active` にする。helmfile は Ready 後の別PRで archive する。
 
 ## ロールバック
 

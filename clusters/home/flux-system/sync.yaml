@@ -117,15 +117,13 @@ kind: Kustomization
 metadata:
   name: memos
   namespace: flux-system
-  annotations:
-    flux.takutk.com/activation-blocked: "true"
 spec:
   interval: 30m
   retryInterval: 2m
   timeout: 5m
   path: ./clusters/home/packages/memos
   prune: false
-  suspend: true
+  suspend: false
   wait: true
   sourceRef:
     kind: GitRepository
