@@ -52,8 +52,9 @@ PVC、PV、namespace、CRD、privileged bindingは、初回移行時に
 | `clusters/home/packages/eso-config/clustersecretstore.yaml` | migration-pending | 既存`ClusterSecretStore`のGit owner。今回のdesiredではESO controllerのReadyを依存条件として有効化。specはliveと一致、移行成功はマージ後に確認する。`gcpsm-secret`のdataは取り込まない。 |
 | `clusters/home/packages/csi-secrets-store/*.yaml` | migration-pending | live 1.4.8の既存Helm releaseを`kube-system`へ移すFlux package。外側は`eso-config`に依存し、外側Kustomizationと内側HelmReleaseを同一commitで有効化する。公式archive SHA256、CRD集合、stable no-hooks inventoryをpolicyに固定するが、live CRD/schema/ownershipの不一致は停止条件とする。 |
 | `middlewares/secrets-store-csi-driver/helmfile.yaml` | migration-pending | CSIの旧所有境界を参照専用として保持する。live 1.4.8をFlux移行baselineに固定し、Renovate PR #28の1.6.0は別管理。 |
-| `middlewares/grafana/grafana-external-secrets.yaml`, `kustomization.yaml` | flux-candidate | secret materialは外部に保持する。 |
-| `middlewares/grafana/helmfile.yaml` | migration-pending | render結果と比較してから変換する。 |
+| `middlewares/grafana/grafana-external-secrets.yaml`, `kustomization.yaml` | flux-candidate | 正本は `clusters/home/packages/grafana/external-secret.yaml`。secret materialは外部に保持する。 |
+| `middlewares/grafana/helmfile.yaml` | migration-pending | 正本は Flux HelmRelease。OTLP 名は live `gc-otlp-endpoint`。helmfile は Ready 後の別PRで archive する。 |
+| `clusters/home/packages/grafana/*`, `clusters/home/flux-system/sync.yaml` | migration-pending | Grafana k8s-monitoring preparation。外側Kustomizationと内側HelmReleaseは両方`suspend: true`、`prune: false`。親 chart `k8s-monitoring` 3.5.3 のみ。alloy 4本は Alloy CR の子。 |
 | `middlewares/metallb-native/*.yaml` | flux-candidate | vendored controller bundleとaddress configuration。 |
 | `middlewares/metrics-server/*.yaml` | flux-candidate | vendored controller bundleとpackage Kustomization。 |
 | `middlewares/nfs-subdir-external-provisioner/helmfile.yaml` | migration-pending | storage controllerの移行にはPVC/PVの安全性レビューが必要。 |
@@ -65,7 +66,7 @@ PVC、PV、namespace、CRD、privileged bindingは、初回移行時に
 | `pv/test-pvc.yaml` | excluded | test PVCは現在もBoundのため、cleanupは別途storageの判断が必要。 |
 | `clusters/home/flux-system/gotk-components.yaml` | bootstrap | Flux `v2.9.3`のCRD/controller/RBAC。生成物とupstream bytesのSHA256をpolicyで検証し、公式bundleの`cluster-admin`付与を含むcluster適用は別承認とする。 |
 | `clusters/home/flux-system/gotk-sync.yaml` | bootstrap | public GitRepositoryとactive root Kustomization。rootは`flux-system/`だけをcomposeし、`packages/`を直接所有しない。 |
-| `clusters/home/flux-system/sync.yaml` | migration-pending | 9つのpackage Kustomization定義。今回のdesiredではESO controller/config/CSIとTREKとMemosとn8nとJellyfinの外側Kustomizationが`suspend: false`、NextcloudとMortisは`suspend: true`、全て`prune: false`。CSIは`eso-config`に、TREKとn8nはESO controller/configに依存する。n8n と Jellyfin の内側 HelmRelease も稼働。 |
+| `clusters/home/flux-system/sync.yaml` | migration-pending | 10つのpackage Kustomization定義。今回のdesiredではESO controller/config/CSIとTREKとMemosとn8nとJellyfinの外側Kustomizationが`suspend: false`、NextcloudとMortisとGrafanaは`suspend: true`、全て`prune: false`。CSIは`eso-config`に、TREKとn8nとGrafanaはESO controller/configに依存する。n8n と Jellyfin の内側 HelmRelease も稼働。 |
 | `clusters/home/packages/trek/*`, `clusters/home/flux-system/sync.yaml` | migration-pending | TREK 4.2.1 app-active package。Namespace、HelmRepository、ExternalSecretと稼働中HelmReleaseを外側Kustomizationが所有する。外側Kustomizationは`suspend: false`、`prune: false`で、内側HelmReleaseも`suspend: false`とする。 |
 | `clusters/home/packages/eso-controller/helmrelease.yaml` | flux-managed | PR #46で移行済み。初回upgrade成功、Ready、chart artifact digest一致を確認済み。 |
 

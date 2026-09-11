@@ -72,6 +72,10 @@ jellyfinActivation:
   stage: app-active
   reason: Jellyfin app activation adopts the existing Helm release after the outer Kustomization and chart contract were verified.
 
+grafanaActivation:
+  stage: preparation
+  reason: Grafana k8s-monitoring preparation keeps the outer Kustomization and inner HelmRelease suspended until credential-backed values are adopted.
+
 fluxActivation:
   phase: csi-secrets-store
   reason: Keep the adopted ESO controller and ClusterSecretStore active, then adopt only the existing CSI Helm release after its read-only preflight; keep Nextcloud suspended.
@@ -541,6 +545,13 @@ renderedSecretExceptions:
     allowedKeys:
       - username
     reason: The pinned Grafana chart stores a non-secret connection username beside externally sourced credentials.
+  - sourcePath: clusters/home/packages/grafana/helmrelease.yaml
+    namespace: grafana
+    kind: Secret
+    name: gc-otlp-endpoint-grafana-k8s-monitoring
+    allowedKeys:
+      - username
+    reason: Live OTLP destination is named gc-otlp-endpoint; the chart stores a non-secret connection username beside passwordFrom credentials.
   - sourcePath: middlewares/pg-operator/kustomization.yaml
     namespace: pg-operator
     kind: Secret
