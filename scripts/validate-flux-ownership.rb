@@ -26,6 +26,7 @@ BLOCKED_ACTIVATION_OBJECTS = Set.new([
 ]).freeze
 TREK_PACKAGE_PATH = "./clusters/home/packages/trek"
 MEMOS_PACKAGE_PATH = "./clusters/home/packages/memos"
+N8N_PACKAGE_PATH = "./clusters/home/packages/n8n"
 TREK_ACTIVATION_BLOCKED = "true"
 KUBECTL = ENV.fetch("FLUX_OWNERSHIP_KUBECTL", "kubectl")
 CURL = ENV.fetch("FLUX_OWNERSHIP_CURL", "curl")
@@ -655,12 +656,21 @@ def validate_activation_phase_contract!(activation, failures)
     actual = activation[key]
     if %w[activeKustomizations activeHelmReleases].include?(key)
       actual = Array(actual).reject do |entry|
-        entry.is_a?(Hash) && [
-          ["flux-system", "trek"],
-          ["trek", "trek"],
-          ["flux-system", "memos"],
-          ["memos", "memos"]
-        ].include?([entry["namespace"], entry["name"]])
+        next false unless entry.is_a?(Hash)
+        pair = [entry["namespace"], entry["name"]]
+        if key == "activeKustomizations"
+          [
+            ["flux-system", "trek"],
+            ["flux-system", "memos"],
+            ["flux-system", "n8n"]
+          ].include?(pair)
+        else
+          [
+            ["trek", "trek"],
+            ["memos", "memos"],
+            ["n8n", "n8n"]
+          ].include?(pair)
+        end
       end
     end
     unless actual == expected
@@ -750,6 +760,44 @@ def validate_memos_stage_state!(stage, outer, inner, active_kustomizations, acti
   end
 end
 
+def validate_n8n_stage_state!(stage, outer, inner, active_kustomizations, active_helm_releases, failures)
+  allowed_stages = %w[preparation config-active app-active]
+  unless allowed_stages.include?(stage)
+    failures << "n8n activation stage is not recognized: #{stage}"
+    return
+  end
+  unless outer.is_a?(Hash) && inner.is_a?(Hash)
+    failures << "n8n activation state requires both outer Kustomization and inner HelmRelease"
+    return
+  end
+
+  outer_id = "kustomize.toolkit.fluxcd.io/v1/Kustomization/flux-system/n8n"
+  inner_id = "helm.toolkit.fluxcd.io/v2/HelmRelease/n8n/n8n"
+  outer_suspend = outer.dig("spec", "suspend")
+  inner_suspend = inner.dig("spec", "suspend")
+  outer_marker = outer.dig("metadata", "annotations", ACTIVATION_BLOCKED)
+  inner_marker = inner.dig("metadata", "annotations", ACTIVATION_BLOCKED)
+  outer_blocked = stage == "preparation"
+  inner_blocked = stage != "app-active"
+
+  failures << "n8n outer Kustomization path must be #{N8N_PACKAGE_PATH}" unless outer.dig("spec", "path") == N8N_PACKAGE_PATH
+  failures << "n8n outer Kustomization dependsOn must be exactly eso-controller then eso-config" unless outer.dig("spec", "dependsOn") == [{"name" => "eso-controller"}, {"name" => "eso-config"}]
+  failures << "n8n outer Kustomization prune must remain false" unless outer.dig("spec", "prune") == false
+  failures << "n8n outer Kustomization suspend state does not match stage #{stage}" unless outer_suspend == outer_blocked
+  failures << "n8n inner HelmRelease suspend state does not match stage #{stage}" unless inner_suspend == inner_blocked
+  failures << "n8n outer Kustomization activation marker does not match stage #{stage}" unless (outer_marker == TREK_ACTIVATION_BLOCKED) == outer_blocked
+  failures << "n8n inner HelmRelease activation marker does not match stage #{stage}" unless (inner_marker == TREK_ACTIVATION_BLOCKED) == inner_blocked
+  failures << "n8n stage #{stage} must not activate an inner HelmRelease under a suspended outer Kustomization" if outer_suspend == true && inner_suspend == false
+
+  if stage == "preparation"
+    failures << "n8n preparation must not be in active Kustomization ownership policy" if active_kustomizations.key?(outer_id)
+    failures << "n8n preparation must not be in active HelmRelease ownership policy" if active_helm_releases.key?(inner_id)
+  else
+    failures << "n8n stage #{stage} requires active Kustomization ownership policy" unless active_kustomizations.key?(outer_id)
+    failures << "n8n stage #{stage} requires active HelmRelease ownership policy" unless active_helm_releases.key?(inner_id)
+  end
+end
+
 def trek_config_active_release?(identity, stage, outer, active_kustomization_policies, active_helm_release_policies, active_helm_release_contracts)
   stage == "config-active" &&
     identity == "helm.toolkit.fluxcd.io/v2/HelmRelease/trek/trek" &&
@@ -826,7 +874,9 @@ def validate_activation_chart_policy!(policy, identity, failures, artifact_cache
       failures << "active HelmRelease #{identity}: chart.repository must identify source.toolkit.fluxcd.io/v1/HelmRepository"
     end
     repository_url = repository["url"].to_s
-    failures << "active HelmRelease #{identity}: chart.repository.url must use HTTPS" unless repository_url.match?(%r{\Ahttps://[^[:space:]]+\z})
+    unless repository_url.match?(%r{\Ahttps://[^[:space:]]+\z}) || repository_url.match?(%r{\Aoci://[^[:space:]]+\z})
+      failures << "active HelmRelease #{identity}: chart.repository.url must use HTTPS or OCI"
+    end
   end
 
   artifact = chart["artifact"]
@@ -963,7 +1013,7 @@ def validate_activation_chart_policy!(policy, identity, failures, artifact_cache
   }
 end
 
-def validate_active_helm_release_safety(document, identity, contract, failures, memos_stage: nil, trek_stage: nil)
+def validate_active_helm_release_safety(document, identity, contract, failures, memos_stage: nil, trek_stage: nil, n8n_stage: nil)
   spec = document["spec"]
   unless spec.is_a?(Hash)
     failures << "active HelmRelease #{identity}: spec must be a mapping"
@@ -984,6 +1034,9 @@ def validate_active_helm_release_safety(document, identity, contract, failures, 
   end
   if identity == "helm.toolkit.fluxcd.io/v2/HelmRelease/trek/trek"
     config_bypass &&= trek_stage == "config-active"
+  end
+  if identity == "helm.toolkit.fluxcd.io/v2/HelmRelease/n8n/n8n"
+    config_bypass &&= n8n_stage == "config-active"
   end
   return if config_bypass
   %w[install upgrade].each do |action|
@@ -1532,11 +1585,18 @@ trek_activation_stage = trek_activation.is_a?(Hash) ? trek_activation["stage"] :
 trek_outer = declared_flux_resources["kustomize.toolkit.fluxcd.io/v1/Kustomization/flux-system/trek"]
 memos_activation = policy["memosActivation"]
 memos_activation_stage = memos_activation.is_a?(Hash) ? memos_activation["stage"] : nil
+n8n_activation = policy["n8nActivation"]
+n8n_activation_stage = n8n_activation.is_a?(Hash) ? n8n_activation["stage"] : nil
 config_active_release = lambda do |identity|
   trek_config_active_release?(identity, trek_activation_stage, trek_outer, active_kustomization_policies, active_helm_release_policies, active_helm_release_contracts) ||
     (
       identity == "helm.toolkit.fluxcd.io/v2/HelmRelease/memos/memos" &&
         memos_activation_stage == "config-active" &&
+        active_helm_release_contracts.dig(identity, "activationStage") == "config-active"
+    ) ||
+    (
+      identity == "helm.toolkit.fluxcd.io/v2/HelmRelease/n8n/n8n" &&
+        n8n_activation_stage == "config-active" &&
         active_helm_release_contracts.dig(identity, "activationStage") == "config-active"
     )
 end
@@ -1571,6 +1631,16 @@ if memos_activation
     memos_outer = declared_flux_resources["kustomize.toolkit.fluxcd.io/v1/Kustomization/flux-system/memos"]
     memos_inner = rendered_documents["helm.toolkit.fluxcd.io/v2/HelmRelease/memos/memos"]
     validate_memos_stage_state!(memos_activation["stage"], memos_outer, memos_inner, active_kustomization_policies, active_helm_release_policies, failures)
+  end
+end
+
+if n8n_activation
+  unless n8n_activation.is_a?(Hash) && n8n_activation["stage"].is_a?(String) && !n8n_activation["stage"].empty? && n8n_activation["reason"].to_s.strip != ""
+    failures << "n8nActivation must declare a stage and reason"
+  else
+    n8n_outer = declared_flux_resources["kustomize.toolkit.fluxcd.io/v1/Kustomization/flux-system/n8n"]
+    n8n_inner = rendered_documents["helm.toolkit.fluxcd.io/v2/HelmRelease/n8n/n8n"]
+    validate_n8n_stage_state!(n8n_activation["stage"], n8n_outer, n8n_inner, active_kustomization_policies, active_helm_release_policies, failures)
   end
 end
 
@@ -1610,6 +1680,23 @@ if memos_activation_stage && Array(package_objects[memos_package_owner]).any?
   end
 end
 
+n8n_package_owner = namespaced_identity("Kustomization", "flux-system", "n8n")
+if n8n_activation_stage && Array(package_objects[n8n_package_owner]).any?
+  Array(package_objects[n8n_package_owner]).each do |path, document|
+    next unless document.is_a?(Hash)
+    identity = required_identity(document, path.to_s)
+    annotations = document.dig("metadata", "annotations") || {}
+    labels = document.dig("metadata", "labels") || {}
+    marked = annotations[ACTIVATION_BLOCKED] == TREK_ACTIVATION_BLOCKED || labels[ACTIVATION_BLOCKED] == TREK_ACTIVATION_BLOCKED
+    allowed_inner = identity == "helm.toolkit.fluxcd.io/v2/HelmRelease/n8n/n8n" && n8n_activation_stage != "app-active"
+    allowed_namespace = identity == "v1/Namespace//n8n" && n8n_activation_stage == "preparation"
+    failures << "n8n stage #{n8n_activation_stage}: unexpected activation-blocked marker on #{identity}" if marked && !allowed_inner && !allowed_namespace
+    if n8n_activation_stage != "preparation" && identity == "v1/Namespace//n8n" && marked
+      failures << "n8n stage #{n8n_activation_stage}: Namespace/n8n activation markers must be removed"
+    end
+  end
+end
+
 package_objects.each do |_owner, entries|
   entries.each do |path, doc|
     next unless doc.is_a?(Hash) && doc["kind"] == "HelmRelease"
@@ -1625,7 +1712,7 @@ package_objects.each do |_owner, entries|
       unless doc.dig("spec", "suspend") == false || (suspended_config_stage && config_active_release.call(id))
         failures << "approved active HelmRelease #{id}: suspend must be false"
       end
-      validate_active_helm_release_safety(doc, id, contract, failures, memos_stage: memos_activation_stage, trek_stage: trek_activation_stage)
+      validate_active_helm_release_safety(doc, id, contract, failures, memos_stage: memos_activation_stage, trek_stage: trek_activation_stage, n8n_stage: n8n_activation_stage)
       chart_spec = doc.dig("spec", "chart", "spec")
       unless chart_spec.is_a?(Hash) && chart_spec["chart"] == contract["chartName"]
         failures << "active HelmRelease #{id}: chart name must be #{contract['chartName']}"

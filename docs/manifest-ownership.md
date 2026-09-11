@@ -40,7 +40,7 @@ PVC、PV、namespace、CRD、privileged bindingは、初回移行時に
 | `clusters/home/packages/mortis/*`, `clusters/home/flux-system/sync.yaml` | migration-pending | Mortis preparation package。live parity確認済み、初回は`suspend: true`・`prune: false`。Activationは別PR。MemosのServiceを参照するが所有しない。 |
 | `apps/n8n/test-pvc.yaml`, `kustomization.yaml` | flux-candidate | ファイル名に反して、Helm releaseが参照するliveのn8n PVC 3個を定義している。正本は `clusters/home/packages/n8n/pvc.yaml`。 |
 | `apps/n8n/helmfile.yaml` | migration-pending | 正本は Flux HelmRelease。helmfile は Ready 後の別PRで archive する。 |
-| `clusters/home/packages/n8n/*`, `clusters/home/flux-system/sync.yaml` | migration-pending | n8n preparation package。外側Kustomizationと内側HelmReleaseは両方`suspend: true`、`prune: false`。chart は OCI `8gears` `n8n` 1.0.7。merge しても起動しない。 |
+| `clusters/home/packages/n8n/*`, `clusters/home/flux-system/sync.yaml` | migration-pending | n8n config-active package。外側Kustomizationは`suspend: false`、内側HelmReleaseは`suspend: true`、`prune: false`。chart は OCI `8gears` `n8n` 1.0.7。merge しても Helm adopt は始まらない。 |
 | `apps/nextcloud/helmfile.yaml` | migration-pending | chart 9.1.3、liveのNextcloud image digest、liveのExternalSecret target/store/remote keyを安全なフィールドだけで一致確認した。PR #36の全valuesは未証明のため、Flux HelmReleaseは停止状態で残す。 |
 | `apps/portainer/portainer-pvc.yaml`, `kustomization.yaml` | flux-candidate | PVCの削除保護が必要。 |
 | `apps/portainer/helmfile.yaml` | migration-pending | render結果と比較してから変換する。 |
@@ -64,7 +64,7 @@ PVC、PV、namespace、CRD、privileged bindingは、初回移行時に
 | `pv/test-pvc.yaml` | excluded | test PVCは現在もBoundのため、cleanupは別途storageの判断が必要。 |
 | `clusters/home/flux-system/gotk-components.yaml` | bootstrap | Flux `v2.9.3`のCRD/controller/RBAC。生成物とupstream bytesのSHA256をpolicyで検証し、公式bundleの`cluster-admin`付与を含むcluster適用は別承認とする。 |
 | `clusters/home/flux-system/gotk-sync.yaml` | bootstrap | public GitRepositoryとactive root Kustomization。rootは`flux-system/`だけをcomposeし、`packages/`を直接所有しない。 |
-| `clusters/home/flux-system/sync.yaml` | migration-pending | 8つのpackage Kustomization定義。今回のdesiredではESO controller/config/CSIとTREKとMemosの外側Kustomizationが`suspend: false`、NextcloudとMortisとn8nは`suspend: true`、全て`prune: false`。CSIは`eso-config`に、TREKとn8nはESO controller/configに依存する。 |
+| `clusters/home/flux-system/sync.yaml` | migration-pending | 8つのpackage Kustomization定義。今回のdesiredではESO controller/config/CSIとTREKとMemosとn8nの外側Kustomizationが`suspend: false`、NextcloudとMortisは`suspend: true`、全て`prune: false`。CSIは`eso-config`に、TREKとn8nはESO controller/configに依存する。n8n の内側 HelmRelease は停止のまま。 |
 | `clusters/home/packages/trek/*`, `clusters/home/flux-system/sync.yaml` | migration-pending | TREK 4.2.1 app-active package。Namespace、HelmRepository、ExternalSecretと稼働中HelmReleaseを外側Kustomizationが所有する。外側Kustomizationは`suspend: false`、`prune: false`で、内側HelmReleaseも`suspend: false`とする。 |
 | `clusters/home/packages/eso-controller/helmrelease.yaml` | flux-managed | PR #46で移行済み。初回upgrade成功、Ready、chart artifact digest一致を確認済み。 |
 
