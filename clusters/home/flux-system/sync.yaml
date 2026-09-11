@@ -134,15 +134,13 @@ kind: Kustomization
 metadata:
   name: n8n
   namespace: flux-system
-  annotations:
-    flux.takutk.com/activation-blocked: "true"
 spec:
   interval: 30m
   retryInterval: 2m
   timeout: 10m
   path: ./clusters/home/packages/n8n
   prune: false
-  suspend: true
+  suspend: false
   wait: true
   dependsOn:
     - name: eso-controller

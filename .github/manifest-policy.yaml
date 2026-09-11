@@ -64,6 +64,10 @@ memosActivation:
   stage: app-active
   reason: Memos app activation adopts the existing Helm release after the outer Kustomization and Git chart contract were verified.
 
+n8nActivation:
+  stage: config-active
+  reason: n8n config activation reconciles Namespace, HelmRepository, PVCs, and a still-suspended HelmRelease. Chart install remains a later app-active PR.
+
 fluxActivation:
   phase: csi-secrets-store
   reason: Keep the adopted ESO controller and ClusterSecretStore active, then adopt only the existing CSI Helm release after its read-only preflight; keep Nextcloud suspended.
@@ -146,6 +150,36 @@ fluxActivation:
           kind: HelmRelease
           namespace: memos
           name: memos
+    - apiVersion: kustomize.toolkit.fluxcd.io/v1
+      kind: Kustomization
+      namespace: flux-system
+      name: n8n
+      path: ./clusters/home/packages/n8n
+      inventory:
+        - apiVersion: v1
+          kind: Namespace
+          namespace: ""
+          name: n8n
+        - apiVersion: source.toolkit.fluxcd.io/v1
+          kind: HelmRepository
+          namespace: flux-system
+          name: n8n
+        - apiVersion: v1
+          kind: PersistentVolumeClaim
+          namespace: n8n
+          name: n8n-pvc
+        - apiVersion: v1
+          kind: PersistentVolumeClaim
+          namespace: n8n
+          name: n8n-webhook-pvc
+        - apiVersion: v1
+          kind: PersistentVolumeClaim
+          namespace: n8n
+          name: n8n-worker-pvc
+        - apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          namespace: n8n
+          name: n8n
   activeHelmReleases:
     - apiVersion: helm.toolkit.fluxcd.io/v2
       kind: HelmRelease
@@ -284,6 +318,26 @@ fluxActivation:
           name: flux-system
       safety:
         activationStage: app-active
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      namespace: n8n
+      name: n8n
+      owner:
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        namespace: flux-system
+        name: n8n
+      chart:
+        name: n8n
+        version: 1.0.7
+        repository:
+          apiVersion: source.toolkit.fluxcd.io/v1
+          kind: HelmRepository
+          namespace: flux-system
+          name: n8n
+          url: oci://8gears.container-registry.com/library
+      safety:
+        activationStage: config-active
 
 fluxBootstrap:
   reason: Pin the zero-Flux installation inputs and keep bootstrap/root ownership distinct from suspended workload packages.
