@@ -2,8 +2,9 @@
 
 ## このPRの範囲
 
-Memos の **preparation** だけ。クラスタ apply、`flux resume`、手動 reconcile はしない。
-merge しても起動しない。
+Memos の **app activation**。内側 `HelmRelease/memos` を `suspend: false` にする。
+merge すると Flux が既存 Helm release を adopt し、Helm reconcile が始まる。
+クラスタへの手動 apply、`flux resume`、手動 reconcile はしない。
 
 ## 構成（ライブ照合 2026-09-10）
 
