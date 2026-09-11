@@ -1819,10 +1819,10 @@ def build_trek_activation_fixture(root, stage, sabotage: nil)
   trek_sync = sync.find { |resource| resource.dig("metadata", "name") == "trek" }
   trek_sync["spec"]["suspend"] = stage == "preparation"
   sync.each do |resource|
-    if ["eso-config", "csi-secrets-store", "memos", "n8n"].include?(resource.dig("metadata", "name"))
+    if ["eso-config", "csi-secrets-store", "memos", "n8n", "jellyfin"].include?(resource.dig("metadata", "name"))
       resource["spec"]["suspend"] = true
     end
-    if ["memos", "n8n"].include?(resource.dig("metadata", "name"))
+    if ["memos", "n8n", "jellyfin"].include?(resource.dig("metadata", "name"))
       resource["metadata"]["annotations"] ||= {}
       resource["metadata"]["annotations"]["flux.takutk.com/activation-blocked"] = "true"
     end
@@ -1846,6 +1846,14 @@ def build_trek_activation_fixture(root, stage, sabotage: nil)
     n8n_helm["metadata"]["annotations"] ||= {}
     n8n_helm["metadata"]["annotations"]["flux.takutk.com/activation-blocked"] = "true"
     write_yaml_stream(n8n_helm_path, [n8n_helm])
+  end
+  jellyfin_helm_path = File.join(root, "clusters/home/packages/jellyfin/helmrelease.yaml")
+  if File.exist?(jellyfin_helm_path)
+    jellyfin_helm = YAML.load_stream(File.read(jellyfin_helm_path)).first
+    jellyfin_helm["spec"]["suspend"] = true
+    jellyfin_helm["metadata"]["annotations"] ||= {}
+    jellyfin_helm["metadata"]["annotations"]["flux.takutk.com/activation-blocked"] = "true"
+    write_yaml_stream(jellyfin_helm_path, [jellyfin_helm])
   end
   trek_sync["metadata"]["annotations"] ||= {}
   if stage == "preparation"
@@ -1886,6 +1894,9 @@ def build_trek_activation_fixture(root, stage, sabotage: nil)
   end
   if policy["n8nActivation"]
     policy["n8nActivation"]["stage"] = "preparation"
+  end
+  if policy["jellyfinActivation"]
+    policy["jellyfinActivation"]["stage"] = "preparation"
   end
   activation = policy.fetch("fluxActivation")
   activation["phase"] = "eso-controller"
@@ -2064,8 +2075,8 @@ def test_jellyfin_preparation_contract
   assert(package_kustomization["resources"] == ["namespace.yaml", "helmrepository.yaml", "pvc.yaml", "helmrelease.yaml"], "Jellyfin package composition drifted")
 
   helm = YAML.safe_load(File.read(File.join(package_root, "helmrelease.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
-  assert(helm.dig("spec", "suspend") == true, "Jellyfin HelmRelease must remain suspended at preparation")
-  assert(helm.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "Jellyfin HelmRelease must stay activation-blocked at preparation")
+  assert(helm.dig("spec", "suspend") == true, "Jellyfin HelmRelease must remain suspended at config-active")
+  assert(helm.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "Jellyfin HelmRelease must stay activation-blocked at config-active")
   assert(helm.dig("spec", "chart", "spec", "chart") == "jellyfin", "Jellyfin chart name drifted")
   assert(helm.dig("spec", "chart", "spec", "version") == "3.2.0", "Jellyfin chart version drifted")
   assert(helm.dig("spec", "chart", "spec", "sourceRef") == {
@@ -2097,7 +2108,8 @@ def test_jellyfin_preparation_contract
   ], "Jellyfin package resource inventory drifted")
   assert(resources.none? { |resource| resource.dig("metadata", "name") == "jellyfin-config" }, "Helm-owned jellyfin-config PVC must not be in the Flux package")
   namespace = resources.find { |resource| resource["kind"] == "Namespace" }
-  assert(namespace.dig("metadata", "labels", "flux.takutk.com/activation-blocked") == "true", "Jellyfin Namespace must stay activation-blocked at preparation")
+  assert(namespace.dig("metadata", "labels", "flux.takutk.com/activation-blocked").nil?, "Jellyfin Namespace activation label must be removed at config-active")
+  assert(namespace.dig("metadata", "annotations", "flux.takutk.com/activation-blocked").nil?, "Jellyfin Namespace activation annotation must be removed at config-active")
 
   sync = File.read(File.join(ROOT, "clusters/home/flux-system/sync.yaml")).split(/^---[ \t]*(?:#.*)?$\n?/).filter_map do |document|
     next if document.strip.empty?
@@ -2106,9 +2118,9 @@ def test_jellyfin_preparation_contract
   jellyfin = sync.find { |resource| resource.dig("metadata", "name") == "jellyfin" }
   assert(jellyfin, "Jellyfin Flux Kustomization is missing")
   assert(jellyfin.dig("spec", "path") == "./clusters/home/packages/jellyfin", "Jellyfin Flux path drifted")
-  assert(jellyfin.dig("spec", "suspend") == true, "Jellyfin preparation must remain suspended")
-  assert(jellyfin.dig("spec", "prune") == false, "Jellyfin preparation must keep prune:false")
-  assert(jellyfin.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "Jellyfin outer Kustomization must stay activation-blocked")
+  assert(jellyfin.dig("spec", "suspend") == false, "Jellyfin outer Kustomization must run at config-active")
+  assert(jellyfin.dig("spec", "prune") == false, "Jellyfin must keep prune:false")
+  assert(jellyfin.dig("metadata", "annotations", "flux.takutk.com/activation-blocked").nil?, "Jellyfin outer Kustomization marker must be removed at config-active")
   assert(jellyfin.dig("spec", "dependsOn").nil?, "Jellyfin must not depend on ESO")
 end
 
