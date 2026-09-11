@@ -1720,7 +1720,7 @@ def test_trek_activation_and_render_contract
   ingress_annotations = package.dig("spec", "values", "ingress", "annotations")
   assert(ingress_annotations == {"konghq.com/strip-path" => "false"}, "TREK Ingress must contain only strip-path")
   patches = package.dig("spec", "postRenderers", 0, "kustomize", "patches")
-  assert(patches.length == 2, "TREK must have Service timeout and DEFAULT_LANGUAGE post-renderer patches")
+  assert(patches.length == 3, "TREK must have Service timeout, DEFAULT_LANGUAGE ConfigMap, and Deployment rollout post-renderer patches")
   timeout_patch = patches.first
   assert(timeout_patch["target"] == {"version" => "v1", "kind" => "Service", "name" => "trek"}, "TREK timeout patch target drifted")
   timeout_document = YAML.load_stream(timeout_patch.fetch("patch")).first
@@ -1738,6 +1738,14 @@ def test_trek_activation_and_render_contract
     "path" => "/data/DEFAULT_LANGUAGE",
     "value" => "ja"
   }, "TREK DEFAULT_LANGUAGE patch drifted")
+  rollout_patch = patches[2]
+  assert(rollout_patch["target"] == {"group" => "apps", "version" => "v1", "kind" => "Deployment", "name" => "trek"}, "TREK language rollout patch target drifted")
+  rollout_document = YAML.load_stream(rollout_patch.fetch("patch")).first
+  assert(rollout_document.first == {
+    "op" => "add",
+    "path" => "/spec/template/metadata/annotations/trek-default-language",
+    "value" => "ja"
+  }, "TREK language rollout patch drifted")
 
   policy = YAML.safe_load(File.read(File.join(ROOT, ".github/manifest-policy.yaml")))
   activation = policy.fetch("fluxActivation")

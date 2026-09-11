@@ -55,6 +55,15 @@ spec:
               - op: add
                 path: /data/DEFAULT_LANGUAGE
                 value: ja
+          - target:
+              group: apps
+              version: v1
+              kind: Deployment
+              name: trek
+            patch: |-
+              - op: add
+                path: /spec/template/metadata/annotations/trek-default-language
+                value: ja
   values:
     image:
       repository: mauriceboe/trek

@@ -13,7 +13,7 @@ rootのFlux Kustomizationが作成する外側 `Kustomization/trek` は `suspend
 - Image: `mauriceboe/trek:4.2.1@sha256:777f4d647e973fe7d87fecd957e854b86d57e8d977fd041763e0ca19b3c2e2c0`
 - Ingress: Kong、`trek.takutk.com/`、strip-path false。connect/read/write timeoutはHelm post-rendererでServiceに付与する
 - Cookie: Cloudflare Tunnel → Kong が HTTP origin のため `COOKIE_SECURE=false`。`FORCE_HTTPS=true` は入れない（redirect loop）
-- Language: `DEFAULT_LANGUAGE=ja`。chart 4.2.1 の ConfigMap allowlist に無いため values.env では落ちる。post-renderer で ConfigMap `trek-config` に載せる。未設定ユーザーのフォールバックであり、保存済み言語設定やブラウザ言語より優先しない
+- Language: `DEFAULT_LANGUAGE=ja`。chart 4.2.1 の ConfigMap allowlist に無いため values.env では落ちる。post-renderer で ConfigMap `trek-config` に載せ、Deployment pod template に `trek-default-language=ja` を付けて Recreate させる（chart の checksum/config は post-renderer 前の ConfigMap なので、annotation 無しだと Pod が転がらない）。未設定ユーザーのフォールバックであり、保存済み言語設定やブラウザ言語より優先しない
 - Timezone: `TZ=Asia/Tokyo`（values.env、chart 通過済み）
 - Data PVC: `nfs-client`, 5Gi
 - Uploads PVC: `nfs-client`, 20Gi
