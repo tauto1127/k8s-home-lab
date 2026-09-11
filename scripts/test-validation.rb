@@ -1988,6 +1988,62 @@ def test_mortis_preparation_contract
   assert(mortis.dig("spec", "prune") == false, "Mortis preparation must keep prune:false")
 end
 
+def test_n8n_preparation_contract
+  package_root = File.join(ROOT, "clusters/home/packages/n8n")
+  package_kustomization = YAML.safe_load(File.read(File.join(package_root, "kustomization.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
+  assert(package_kustomization["resources"] == ["namespace.yaml", "helmrepository.yaml", "pvc.yaml", "helmrelease.yaml"], "n8n package composition drifted")
+
+  helm = YAML.safe_load(File.read(File.join(package_root, "helmrelease.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
+  assert(helm.dig("spec", "suspend") == true, "n8n HelmRelease must remain suspended at preparation")
+  assert(helm.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "n8n HelmRelease must stay activation-blocked at preparation")
+  assert(helm.dig("spec", "chart", "spec", "chart") == "n8n", "n8n chart name drifted")
+  assert(helm.dig("spec", "chart", "spec", "version") == "1.0.7", "n8n chart version drifted")
+  assert(helm.dig("spec", "chart", "spec", "sourceRef") == {
+    "kind" => "HelmRepository",
+    "name" => "n8n",
+    "namespace" => "flux-system"
+  }, "n8n chart sourceRef drifted")
+  assert(helm.dig("spec", "values", "image", "tag") == "1.85.1@sha256:73c40a7fc6106e22d80ba48f753d991a7a9752b15a1b215a8a301b131badebf3", "n8n image pin drifted")
+  assert(helm.dig("spec", "values", "main", "service", "annotations", "metallb.universe.tf/loadBalancerIPs") == "192.168.11.207", "n8n MetalLB IP drifted")
+  assert(helm.dig("spec", "install", "disableTakeOwnership") == true, "n8n adopt flag drifted")
+  assert(helm.dig("spec", "values", "main", "persistence", "existingClaim") == "n8n-pvc", "n8n main PVC drifted")
+  assert(helm.dig("spec", "values", "webhook", "persistence", "existingClaim") == "n8n-webhook-pvc", "n8n webhook PVC drifted")
+  assert(helm.dig("spec", "values", "worker", "persistence", "existingClaim") == "n8n-worker-pvc", "n8n worker PVC drifted")
+
+  repo = YAML.safe_load(File.read(File.join(package_root, "helmrepository.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
+  assert(repo.dig("spec", "type") == "oci", "n8n HelmRepository must be OCI")
+  assert(repo.dig("spec", "url") == "oci://8gears.container-registry.com/library", "n8n HelmRepository URL drifted")
+
+  rendered, = assert_success("kubectl", "kustomize", package_root)
+  resources = rendered.split(/^---[ \t]*(?:#.*)?$\n?/).filter_map do |document|
+    next if document.strip.empty?
+    YAML.safe_load(document, permitted_classes: [], permitted_symbols: [], aliases: false)
+  end
+  identities = resources.map { |resource| [resource["apiVersion"], resource["kind"], resource.dig("metadata", "namespace").to_s, resource.dig("metadata", "name")].join("/") }
+  assert(identities == [
+    "v1/Namespace//n8n",
+    "v1/PersistentVolumeClaim/n8n/n8n-pvc",
+    "v1/PersistentVolumeClaim/n8n/n8n-webhook-pvc",
+    "v1/PersistentVolumeClaim/n8n/n8n-worker-pvc",
+    "helm.toolkit.fluxcd.io/v2/HelmRelease/n8n/n8n",
+    "source.toolkit.fluxcd.io/v1/HelmRepository/flux-system/n8n"
+  ], "n8n package resource inventory drifted")
+  namespace = resources.find { |resource| resource["kind"] == "Namespace" }
+  assert(namespace.dig("metadata", "labels", "flux.takutk.com/activation-blocked") == "true", "n8n Namespace must stay activation-blocked at preparation")
+
+  sync = File.read(File.join(ROOT, "clusters/home/flux-system/sync.yaml")).split(/^---[ \t]*(?:#.*)?$\n?/).filter_map do |document|
+    next if document.strip.empty?
+    YAML.safe_load(document, permitted_classes: [], permitted_symbols: [], aliases: false)
+  end
+  n8n = sync.find { |resource| resource.dig("metadata", "name") == "n8n" }
+  assert(n8n, "n8n Flux Kustomization is missing")
+  assert(n8n.dig("spec", "path") == "./clusters/home/packages/n8n", "n8n Flux path drifted")
+  assert(n8n.dig("spec", "suspend") == true, "n8n preparation must remain suspended")
+  assert(n8n.dig("spec", "prune") == false, "n8n preparation must keep prune:false")
+  assert(n8n.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "n8n outer Kustomization must stay activation-blocked")
+  assert(n8n.dig("spec", "dependsOn") == [{"name" => "eso-controller"}, {"name" => "eso-config"}], "n8n must depend on ESO")
+end
+
 def test_memos_preparation_contract
   package_root = File.join(ROOT, "clusters/home/packages/memos")
   package_kustomization = YAML.safe_load(File.read(File.join(package_root, "kustomization.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
@@ -2035,6 +2091,7 @@ def test_memos_preparation_contract
 end
 
 test_mortis_preparation_contract
+test_n8n_preparation_contract
 test_memos_preparation_contract
 test_cumulative_activation_validation
 test_trek_activation_and_render_contract

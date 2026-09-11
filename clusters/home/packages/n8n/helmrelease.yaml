@@ -1,0 +1,150 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: n8n
+  namespace: n8n
+  annotations:
+    flux.takutk.com/activation-blocked: "true"
+spec:
+  interval: 30m
+  timeout: 10m
+  suspend: true
+  releaseName: n8n
+  targetNamespace: n8n
+  storageNamespace: n8n
+  chart:
+    spec:
+      chart: n8n
+      version: 1.0.7
+      sourceRef:
+        kind: HelmRepository
+        name: n8n
+        namespace: flux-system
+      interval: 30m
+  install:
+    createNamespace: false
+    disableTakeOwnership: true
+    remediation:
+      retries: 0
+  upgrade:
+    disableTakeOwnership: true
+    remediation:
+      retries: 0
+      remediateLastFailure: false
+  uninstall:
+    keepHistory: true
+  values:
+    namespace: n8n
+    image:
+      repository: n8nio/n8n
+      tag: "1.85.1@sha256:73c40a7fc6106e22d80ba48f753d991a7a9752b15a1b215a8a301b131badebf3"
+    main:
+      service:
+        type: LoadBalancer
+        annotations:
+          metallb.universe.tf/loadBalancerIPs: "192.168.11.207"
+      persistence:
+        enabled: true
+        type: existing
+        existingClaim: n8n-pvc
+      config:
+        webohook_url: https://n8n.takutk.com
+        queue:
+          bull:
+            redis:
+              host: redis-master.redis.svc.cluster.local
+              port: 6379
+      extraEnv:
+        EXECUTIONS_MODE:
+          value: "queue"
+        WEBHOOK_URL:
+          value: https://n8n.takutk.com
+        OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS:
+          value: "true"
+        N8N_RUNNERS_ENABLED:
+          value: "true"
+        N8N_COMMUNITY_PACKAGES_ENABLED:
+          value: "true"
+        N8N_METRICS:
+          value: "false"
+        QUEUE_HEALTH_CHECK_ACTIVE:
+          value: "true"
+    ingress:
+      enabled: true
+      hosts:
+        - host: n8n.takutk.com
+          paths:
+            - /
+    webhook:
+      enabled: true
+      persistence:
+        enabled: true
+        type: existing
+        existingClaim: n8n-webhook-pvc
+      resources:
+        limits:
+          cpu: 500m
+          memory: 1Gi
+          ephemeral-storage: 1Gi
+        requests:
+          cpu: 250m
+          memory: 512Mi
+          ephemeral-storage: 500Mi
+      tolerations:
+        - key: node.kubernetes.io/disk-pressure
+          operator: Exists
+          effect: NoSchedule
+      extraEnv:
+        WEBHOOK_URL:
+          value: https://n8n.takutk.com
+        EXECUTIONS_MODE:
+          value: "queue"
+        N8N_ENCRYPTION_KEY:
+          valueFrom:
+            secretKeyRef:
+              name: n8n-key
+              key: n8n-key
+    worker:
+      enabled: true
+      persistence:
+        enabled: true
+        type: existing
+        existingClaim: n8n-worker-pvc
+      tolerations:
+        - key: node.kubernetes.io/disk-pressure
+          operator: Exists
+          effect: NoSchedule
+      extraEnv:
+        EXECUTIONS_MODE:
+          value: "queue"
+        N8N_ENCRYPTION_KEY:
+          valueFrom:
+            secretKeyRef:
+              name: n8n-key
+              key: n8n-key
+        OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS:
+          value: "true"
+        N8N_RUNNERS_ENABLED:
+          value: "true"
+        QUEUE_HEALTH_CHECK_ACTIVE:
+          value: "true"
+    extraManifests:
+      - apiVersion: external-secrets.io/v1beta1
+        kind: ExternalSecret
+        metadata:
+          name: n8n-key
+          namespace: n8n
+        spec:
+          secretStoreRef:
+            name: secret-store-provider
+            kind: ClusterSecretStore
+          refreshInterval: "24h"
+          target:
+            name: n8n-key
+            deletionPolicy: Retain
+          data:
+            - secretKey: n8n-key
+              remoteRef:
+                key: n8n-key
+                version: latest
+                decodingStrategy: None
