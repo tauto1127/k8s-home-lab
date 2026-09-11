@@ -60,6 +60,10 @@ trekActivation:
   stage: app-active
   reason: TREK app activation enables the approved inner HelmRelease after configuration and GSM secret sync were verified.
 
+memosActivation:
+  stage: config-active
+  reason: Memos config activation reconciles Namespace and a still-suspended HelmRelease. Chart install remains a later app-active PR.
+
 fluxActivation:
   phase: csi-secrets-store
   reason: Keep the adopted ESO controller and ClusterSecretStore active, then adopt only the existing CSI Helm release after its read-only preflight; keep Nextcloud suspended.
@@ -128,6 +132,20 @@ fluxActivation:
           kind: HelmRelease
           namespace: trek
           name: trek
+    - apiVersion: kustomize.toolkit.fluxcd.io/v1
+      kind: Kustomization
+      namespace: flux-system
+      name: memos
+      path: ./clusters/home/packages/memos
+      inventory:
+        - apiVersion: v1
+          kind: Namespace
+          namespace: ""
+          name: memos
+        - apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          namespace: memos
+          name: memos
   activeHelmReleases:
     - apiVersion: helm.toolkit.fluxcd.io/v2
       kind: HelmRelease
@@ -245,6 +263,27 @@ fluxActivation:
           url: https://chart.liketrek.com
       safety:
         trekStage: app-active
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      namespace: memos
+      name: memos
+      owner:
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        namespace: flux-system
+        name: memos
+      chart:
+        name: memos
+        version: 0.2.1
+        path: ./apps/memos/chart
+        filesSha256: 1245e0996f76cfde9023bc659bcbcc63bbabaff75a297101c94e18963fcfaa81
+        repository:
+          apiVersion: source.toolkit.fluxcd.io/v1
+          kind: GitRepository
+          namespace: flux-system
+          name: flux-system
+      safety:
+        activationStage: config-active
 
 fluxBootstrap:
   reason: Pin the zero-Flux installation inputs and keep bootstrap/root ownership distinct from suspended workload packages.
