@@ -69,8 +69,8 @@ n8nActivation:
   reason: n8n app activation adopts the existing Helm release after the outer Kustomization and OCI chart contract were verified.
 
 jellyfinActivation:
-  stage: config-active
-  reason: Jellyfin config activation reconciles Namespace, HelmRepository, media PV/PVC, and a still-suspended HelmRelease. Chart install remains a later app-active PR.
+  stage: app-active
+  reason: Jellyfin app activation adopts the existing Helm release after the outer Kustomization and chart contract were verified.
 
 fluxActivation:
   phase: csi-secrets-store
@@ -387,7 +387,7 @@ fluxActivation:
           name: jellyfin
           url: https://jellyfin.github.io/jellyfin-helm
       safety:
-        activationStage: config-active
+        activationStage: app-active
 
 fluxBootstrap:
   reason: Pin the zero-Flux installation inputs and keep bootstrap/root ownership distinct from suspended workload packages.

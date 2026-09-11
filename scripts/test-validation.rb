@@ -2075,8 +2075,10 @@ def test_jellyfin_preparation_contract
   assert(package_kustomization["resources"] == ["namespace.yaml", "helmrepository.yaml", "pvc.yaml", "helmrelease.yaml"], "Jellyfin package composition drifted")
 
   helm = YAML.safe_load(File.read(File.join(package_root, "helmrelease.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
-  assert(helm.dig("spec", "suspend") == true, "Jellyfin HelmRelease must remain suspended at config-active")
-  assert(helm.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "Jellyfin HelmRelease must stay activation-blocked at config-active")
+  assert(helm.dig("spec", "suspend") == false, "Jellyfin HelmRelease must run at app-active")
+  assert(helm.dig("metadata", "annotations", "flux.takutk.com/activation-blocked").nil?, "Jellyfin HelmRelease marker must be removed at app-active")
+  assert(helm.dig("spec", "install", "crds") == "Skip", "Jellyfin install.crds must be Skip")
+  assert(helm.dig("spec", "upgrade", "crds") == "Skip", "Jellyfin upgrade.crds must be Skip")
   assert(helm.dig("spec", "chart", "spec", "chart") == "jellyfin", "Jellyfin chart name drifted")
   assert(helm.dig("spec", "chart", "spec", "version") == "3.2.0", "Jellyfin chart version drifted")
   assert(helm.dig("spec", "chart", "spec", "sourceRef") == {
