@@ -1720,16 +1720,24 @@ def test_trek_activation_and_render_contract
   ingress_annotations = package.dig("spec", "values", "ingress", "annotations")
   assert(ingress_annotations == {"konghq.com/strip-path" => "false"}, "TREK Ingress must contain only strip-path")
   patches = package.dig("spec", "postRenderers", 0, "kustomize", "patches")
-  assert(patches.length == 1, "TREK must have exactly one post-renderer patch")
-  patch = patches.first
-  assert(patch["target"] == {"version" => "v1", "kind" => "Service", "name" => "trek"}, "TREK timeout patch target drifted")
-  patch_document = YAML.load_stream(patch.fetch("patch")).first
-  assert(patch_document.first["path"] == "/metadata/annotations", "TREK timeout patch path drifted")
-  assert(patch_document.first.dig("value") == {
+  assert(patches.length == 2, "TREK must have Service timeout and DEFAULT_LANGUAGE post-renderer patches")
+  timeout_patch = patches.first
+  assert(timeout_patch["target"] == {"version" => "v1", "kind" => "Service", "name" => "trek"}, "TREK timeout patch target drifted")
+  timeout_document = YAML.load_stream(timeout_patch.fetch("patch")).first
+  assert(timeout_document.first["path"] == "/metadata/annotations", "TREK timeout patch path drifted")
+  assert(timeout_document.first.dig("value") == {
     "konghq.com/connect-timeout" => "60000",
     "konghq.com/read-timeout" => "86400000",
     "konghq.com/write-timeout" => "86400000"
   }, "TREK Service timeout annotations drifted")
+  language_patch = patches[1]
+  assert(language_patch["target"] == {"version" => "v1", "kind" => "ConfigMap", "name" => "trek-config"}, "TREK language patch target drifted")
+  language_document = YAML.load_stream(language_patch.fetch("patch")).first
+  assert(language_document.first == {
+    "op" => "add",
+    "path" => "/data/DEFAULT_LANGUAGE",
+    "value" => "ja"
+  }, "TREK DEFAULT_LANGUAGE patch drifted")
 
   policy = YAML.safe_load(File.read(File.join(ROOT, ".github/manifest-policy.yaml")))
   activation = policy.fetch("fluxActivation")

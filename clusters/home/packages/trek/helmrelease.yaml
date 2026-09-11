@@ -47,6 +47,14 @@ spec:
                   konghq.com/connect-timeout: "60000"
                   konghq.com/read-timeout: "86400000"
                   konghq.com/write-timeout: "86400000"
+          - target:
+              version: v1
+              kind: ConfigMap
+              name: trek-config
+            patch: |-
+              - op: add
+                path: /data/DEFAULT_LANGUAGE
+                value: ja
   values:
     image:
       repository: mauriceboe/trek
