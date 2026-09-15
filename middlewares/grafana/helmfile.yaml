@@ -11,7 +11,7 @@ releases:
     createNamespace: true         # --create-namespace フラグに対応
     atomic: true                  # --atomic フラグに対応
     timeout: 300                  # --timeout フラグに対応 (秒単位)
-    version: 3.5.3
+    version: 3.8.13
     values:
       - cluster:
           name: my-cluster
