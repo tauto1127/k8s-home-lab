@@ -31,7 +31,7 @@ spec:
         app: couchdb
     spec:
       containers:
-        - image: couchdb:3.5.0
+        - image: couchdb:3.5.2
           name: couchdb
           env:
             - name: COUCHDB_PASSWORD
