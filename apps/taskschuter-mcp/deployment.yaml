@@ -28,7 +28,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: mcp
-          image: ghcr.io/tauto1127/taskchuter_mcp@sha256:88c1ca3069c086f06b3a06323a6bbd5b9f517b261b1f8a908256e022d3cc0df7
+          image: ghcr.io/tauto1127/taskchuter_mcp@sha256:1b121e6034880eba7a84b0b90377d8c944a7bcc6c7da14405538f9058d097c6c
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
