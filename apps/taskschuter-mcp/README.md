@@ -14,3 +14,9 @@ in Git:
 
 The MCP server accepts a Supabase OAuth access token, verifies it with
 Supabase Auth, then applies the owner allow-list before serving a tool call.
+
+The CLI uses a dedicated public OAuth client registered in the production
+Supabase project with the exact redirect URI
+`https://mcp.takutk.com/device/callback`. Its public client ID is in the
+ConfigMap as `TASKSCHUTER_CLI_OAUTH_CLIENT_ID`. Keep the MCP deployment at one
+replica while pending device login sessions are held in memory.
