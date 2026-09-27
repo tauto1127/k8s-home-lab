@@ -9,8 +9,8 @@ merge すると Flux が既存 Helm release を adopt し、Helm reconcile が�
 ## 構成（ライブ照合 2026-09-10）
 
 - Namespace/release: `memos`
-- Chart: リポジトリ内 `apps/memos/chart`（chart 0.2.1、app 0.29.0）
-- Image tag: `0.29.0`（digest はライブに無かったので未ピン）
+- Chart: リポジトリ内 `apps/memos/chart`（chart 0.2.2、app 0.31.0）
+- Image tag: `0.31.0`（digest はライブに無かったので未ピン）
 - Service: LoadBalancer、port 5230、MetalLB `192.168.11.209`
 - PVC: `memos`、`nfs-client`、10Gi、RWO、Bound
 - Ingress: disabled

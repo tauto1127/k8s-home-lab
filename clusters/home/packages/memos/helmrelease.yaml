@@ -35,7 +35,7 @@ spec:
     keepHistory: true
   values:
     image:
-      tag: "0.29.0"
+      tag: "0.31.0"
     service:
       type: LoadBalancer
       annotations:

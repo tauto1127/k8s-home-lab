@@ -9,7 +9,7 @@ image:
   imageName: usememos/memos
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
-  tag: "0.29.0"
+  tag: "0.31.0"
 
 imagePullSecrets: []
 nameOverride: ""
