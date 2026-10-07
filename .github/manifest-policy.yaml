@@ -94,6 +94,22 @@ fluxActivation:
           kind: HelmRepository
           namespace: flux-system
           name: external-secrets
+        - apiVersion: cert-manager.io/v1
+          kind: Issuer
+          namespace: external-secrets
+          name: bitwarden-ca-selfsigned
+        - apiVersion: cert-manager.io/v1
+          kind: Certificate
+          namespace: external-secrets
+          name: bitwarden-sdk-ca
+        - apiVersion: cert-manager.io/v1
+          kind: Issuer
+          namespace: external-secrets
+          name: bitwarden-ca-issuer
+        - apiVersion: cert-manager.io/v1
+          kind: Certificate
+          namespace: external-secrets
+          name: bitwarden-tls-certs
         - apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease
           namespace: external-secrets
@@ -242,6 +258,7 @@ fluxActivation:
             sha256: 5fa17b33c731ab29d089f2bfd350342b002c6758db9ad7f7667c71c809f23ab5
       safety:
         installCRDs: true
+        bitwardenSdkServerEnabled: true
     - apiVersion: helm.toolkit.fluxcd.io/v2
       kind: HelmRelease
       namespace: kube-system
