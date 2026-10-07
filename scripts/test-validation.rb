@@ -2219,7 +2219,7 @@ def test_memos_preparation_contract
     "namespace" => "flux-system"
   }, "Memos chart sourceRef drifted")
   assert(helm.dig("spec", "chart", "spec", "reconcileStrategy") == "Revision", "Memos Git chart must reconcile by Git revision")
-  assert(helm.dig("spec", "values", "image", "tag") == "0.29.0", "Memos image tag drifted")
+  assert(helm.dig("spec", "values", "image", "tag") == "0.31.0", "Memos image tag drifted")
   assert(helm.dig("spec", "values", "service", "type") == "LoadBalancer", "Memos service type drifted")
   assert(helm.dig("spec", "values", "service", "annotations", "metallb.io/loadBalancerIPs") == "192.168.11.209", "Memos MetalLB IP drifted")
   assert(helm.dig("spec", "values", "persistence", "enabled") == true, "Memos persistence drifted")

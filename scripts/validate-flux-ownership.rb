@@ -95,6 +95,30 @@ ESO_CONTROLLER_ACTIVATION_CONTRACT = {
         "name" => "external-secrets"
       },
       {
+        "apiVersion" => "cert-manager.io/v1",
+        "kind" => "Issuer",
+        "namespace" => "external-secrets",
+        "name" => "bitwarden-ca-selfsigned"
+      },
+      {
+        "apiVersion" => "cert-manager.io/v1",
+        "kind" => "Certificate",
+        "namespace" => "external-secrets",
+        "name" => "bitwarden-sdk-ca"
+      },
+      {
+        "apiVersion" => "cert-manager.io/v1",
+        "kind" => "Issuer",
+        "namespace" => "external-secrets",
+        "name" => "bitwarden-ca-issuer"
+      },
+      {
+        "apiVersion" => "cert-manager.io/v1",
+        "kind" => "Certificate",
+        "namespace" => "external-secrets",
+        "name" => "bitwarden-tls-certs"
+      },
+      {
         "apiVersion" => "helm.toolkit.fluxcd.io/v2",
         "kind" => "HelmRelease",
         "namespace" => "external-secrets",
@@ -133,7 +157,7 @@ ESO_CONTROLLER_ACTIVATION_CONTRACT = {
         }
       }
     },
-    "safety" => {"installCRDs" => true}
+    "safety" => {"installCRDs" => true, "bitwardenSdkServerEnabled" => true}
   }]
 }.freeze
 ESO_CONFIG_ACTIVATION_CONTRACT = {
@@ -1063,6 +1087,9 @@ def validate_activation_chart_policy!(policy, identity, failures, artifact_cache
   if safety.key?("installCRDs") && ![true, false].include?(safety["installCRDs"])
     failures << "active HelmRelease #{identity}: safety.installCRDs must be a boolean"
   end
+  if safety.key?("bitwardenSdkServerEnabled") && ![true, false].include?(safety["bitwardenSdkServerEnabled"])
+    failures << "active HelmRelease #{identity}: safety.bitwardenSdkServerEnabled must be a boolean"
+  end
   if safety.key?("linuxCRDsEnabled") && ![true, false].include?(safety["linuxCRDsEnabled"])
     failures << "active HelmRelease #{identity}: safety.linuxCRDsEnabled must be a boolean"
   end
@@ -1088,6 +1115,7 @@ def validate_activation_chart_policy!(policy, identity, failures, artifact_cache
     "ownerIdentity" => namespaced_identity("Kustomization", owner_policy["namespace"], owner_policy["name"]),
     "artifact" => artifact_contract,
     "installCRDs" => safety["installCRDs"],
+    "bitwardenSdkServerEnabled" => safety["bitwardenSdkServerEnabled"],
     "disableHooks" => safety["disableHooks"],
     "linuxCRDsEnabled" => safety["linuxCRDsEnabled"],
     "trekStage" => safety["trekStage"],
@@ -1145,6 +1173,12 @@ def validate_active_helm_release_safety(document, identity, contract, failures, 
     expected = contract["installCRDs"]
     unless spec.dig("values", "installCRDs") == expected
       failures << "active HelmRelease #{identity}: spec.values.installCRDs must be #{expected.inspect}"
+    end
+  end
+  unless contract["bitwardenSdkServerEnabled"].nil?
+    expected = contract["bitwardenSdkServerEnabled"]
+    unless spec.dig("values", "bitwarden-sdk-server", "enabled") == expected
+      failures << "active HelmRelease #{identity}: spec.values.bitwarden-sdk-server.enabled must be #{expected.inspect}"
     end
   end
   unless contract["linuxCRDsEnabled"].nil?

@@ -36,3 +36,5 @@ spec:
     keepHistory: true
   values:
     installCRDs: true
+    bitwarden-sdk-server:
+      enabled: true
