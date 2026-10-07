@@ -361,7 +361,7 @@ fluxActivation:
         name: memos
         version: 0.2.1
         path: ./apps/memos/chart
-        filesSha256: 1245e0996f76cfde9023bc659bcbcc63bbabaff75a297101c94e18963fcfaa81
+        filesSha256: af9f8c2cba848f4834b4a3fb4a5ddd122063f831f93a9a7c7edfc221f9a8f7e7
         repository:
           apiVersion: source.toolkit.fluxcd.io/v1
           kind: GitRepository
