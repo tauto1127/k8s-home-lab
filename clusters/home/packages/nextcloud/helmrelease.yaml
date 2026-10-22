@@ -32,7 +32,7 @@ spec:
   values:
     image:
       repository: docker.io/library/nextcloud
-      tag: 33.0.5-apache@sha256:476228e615088e7d2de4bd9a87187961dfbff1577a96ff07955ec35dbe18f3c9
+      tag: 33.0.10-apache@sha256:ca04a99f5a081030dd6c494bdfbb1cbc2bf3e2e10c0f9fcdc3be031ac3803f77
     nextcloud:
       existingSecret:
         enabled: true
