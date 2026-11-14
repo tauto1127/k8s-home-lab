@@ -63,8 +63,22 @@ def _import_playwright():
     return sync_playwright
 
 
+def clear_stale_singleton() -> None:
+    """前のプロセスが残した Chromium の Singleton を消す。
+
+    PVC 上のプロファイルは Pod の再作成をまたいで残るため、クラッシュや強制終了のあとに
+    SingletonLock が残ると、以後の起動がすべて "profile appears to be in use" で失敗する。
+    """
+    for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+        try:
+            (DEFAULT_PROFILE / name).unlink()
+        except FileNotFoundError:
+            pass
+
+
 def launch(p, headless: bool):
     DEFAULT_PROFILE.mkdir(parents=True, exist_ok=True)
+    clear_stale_singleton()
     ctx = p.chromium.launch_persistent_context(
         str(DEFAULT_PROFILE),
         headless=headless,
