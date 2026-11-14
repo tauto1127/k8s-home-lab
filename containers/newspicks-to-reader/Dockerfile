@@ -15,7 +15,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 RUN pip install --no-cache-dir playwright && \
-    python -m playwright install --with-deps chromium && \
+    python -m playwright install chromium && \
+    python -m playwright install-deps chromium && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
