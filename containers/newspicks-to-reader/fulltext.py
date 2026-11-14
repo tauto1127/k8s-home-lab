@@ -77,6 +77,8 @@ def launch(p, headless: bool):
         ),
         is_mobile=True,
         has_touch=True,
+        # コンテナ内は root 扱いで動くため、Chromium の sandbox を無効化しないと起動しない。
+        chromium_sandbox=False,
     )
     return ctx
 
