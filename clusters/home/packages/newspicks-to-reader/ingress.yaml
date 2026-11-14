@@ -1,0 +1,18 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: newspicks-to-reader
+  namespace: newspicks-to-reader
+spec:
+  ingressClassName: kong
+  rules:
+    - host: newspicks-to-reader.takutk.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: newspicks-to-reader-ingest
+                port:
+                  number: 8787
