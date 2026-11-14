@@ -5,8 +5,9 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     NP2R_PROFILE=/data/profile
 
+# libatomic1 は playwright 同梱の node ドライバが要求する（slim イメージには入っていない）。
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl \
+        ca-certificates curl libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Playwright（Chromium）と OS 依存をまとめて入れる。
