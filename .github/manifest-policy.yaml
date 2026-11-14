@@ -64,6 +64,10 @@ memosActivation:
   stage: app-active
   reason: Memos app activation adopts the existing Helm release after the outer Kustomization and Git chart contract were verified.
 
+newspicksToReaderActivation:
+  stage: app-active
+  reason: newspicks-to-reader は新規 workload で adopt 対象の Helm release がない。raw Deployment を外側 Kustomization から直接適用するため、外側 Kustomization の suspend のみで活性化する。
+
 n8nActivation:
   stage: app-active
   reason: n8n app activation adopts the existing Helm release after the outer Kustomization and OCI chart contract were verified.
@@ -174,6 +178,44 @@ fluxActivation:
           kind: HelmRelease
           namespace: memos
           name: memos
+    - apiVersion: kustomize.toolkit.fluxcd.io/v1
+      kind: Kustomization
+      namespace: flux-system
+      name: newspicks-to-reader
+      path: ./clusters/home/packages/newspicks-to-reader
+      inventory:
+        - apiVersion: v1
+          kind: Namespace
+          namespace: ""
+          name: newspicks-to-reader
+        - apiVersion: external-secrets.io/v1beta1
+          kind: ExternalSecret
+          namespace: newspicks-to-reader
+          name: newspicks-to-reader-secrets
+        - apiVersion: v1
+          kind: PersistentVolumeClaim
+          namespace: newspicks-to-reader
+          name: newspicks-to-reader-profile
+        - apiVersion: apps/v1
+          kind: Deployment
+          namespace: newspicks-to-reader
+          name: newspicks-to-reader-ingest
+        - apiVersion: apps/v1
+          kind: Deployment
+          namespace: newspicks-to-reader
+          name: newspicks-to-reader-fulltext
+        - apiVersion: v1
+          kind: Service
+          namespace: newspicks-to-reader
+          name: newspicks-to-reader-ingest
+        - apiVersion: v1
+          kind: Service
+          namespace: newspicks-to-reader
+          name: newspicks-to-reader-fulltext
+        - apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          namespace: newspicks-to-reader
+          name: newspicks-to-reader
     - apiVersion: kustomize.toolkit.fluxcd.io/v1
       kind: Kustomization
       namespace: flux-system
