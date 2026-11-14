@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: newspicks-to-reader-ingest
+  namespace: newspicks-to-reader
+  labels:
+    app.kubernetes.io/name: newspicks-to-reader
+    app.kubernetes.io/component: ingest
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: newspicks-to-reader
+      app.kubernetes.io/component: ingest
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: newspicks-to-reader
+        app.kubernetes.io/component: ingest
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ingest
+          image: ghcr.io/tauto1127/newspicks-to-reader:0.1.0@sha256:b179703b8377178474f778ef41921895484b44db74d9cc14daf7ee222fb7710e
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - ingest_server.py
+          ports:
+            - name: http
+              containerPort: 8787
+          env:
+            - name: NP2R_PORT
+              value: "8787"
+            - name: NP2R_SCRIPT
+              value: /app/np2reader.py
+            - name: NP2R_FULLTEXT_ENDPOINT
+              value: http://newspicks-to-reader-fulltext:8790/fetch
+            - name: NP2R_FULLTEXT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: newspicks-to-reader-secrets
+                  key: NP2R_FULLTEXT_TOKEN
+            - name: NP2R_HOME_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: newspicks-to-reader-secrets
+                  key: NP2R_HOME_TOKEN
+            - name: READWISE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: newspicks-to-reader-secrets
+                  key: READWISE_TOKEN
+            - name: NP2R_LOCATION
+              value: new
+            - name: NP2R_TAGS
+              value: newspicks
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            limits:
+              memory: 512Mi
+            requests:
+              cpu: 50m
+              memory: 128Mi
