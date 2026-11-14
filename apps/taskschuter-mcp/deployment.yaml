@@ -8,6 +8,13 @@ metadata:
     app.kubernetes.io/part-of: taskschuter-mcp
 spec:
   replicas: 1
+  # Single replica by design (device-login state is in memory), and the worker
+  # node has no CPU headroom for a surge pod: replace the pod in place.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: taskschuter-mcp
@@ -28,7 +35,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: mcp
-          image: ghcr.io/tauto1127/taskchuter_mcp@sha256:1b121e6034880eba7a84b0b90377d8c944a7bcc6c7da14405538f9058d097c6c
+          image: ghcr.io/tauto1127/taskchuter_mcp@sha256:522ba64b556836891b5d35e8c166794159b1b35bc0473e5a7167f8743049bb0a
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
