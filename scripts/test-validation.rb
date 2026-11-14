@@ -1819,10 +1819,10 @@ def build_trek_activation_fixture(root, stage, sabotage: nil)
   trek_sync = sync.find { |resource| resource.dig("metadata", "name") == "trek" }
   trek_sync["spec"]["suspend"] = stage == "preparation"
   sync.each do |resource|
-    if ["eso-config", "csi-secrets-store", "memos", "n8n", "jellyfin", "grafana"].include?(resource.dig("metadata", "name"))
+    if ["eso-config", "csi-secrets-store", "memos", "n8n", "jellyfin", "grafana", "newspicks-to-reader"].include?(resource.dig("metadata", "name"))
       resource["spec"]["suspend"] = true
     end
-    if ["memos", "n8n", "jellyfin", "grafana"].include?(resource.dig("metadata", "name"))
+    if ["memos", "n8n", "jellyfin", "grafana", "newspicks-to-reader"].include?(resource.dig("metadata", "name"))
       resource["metadata"]["annotations"] ||= {}
       resource["metadata"]["annotations"]["flux.takutk.com/activation-blocked"] = "true"
     end
