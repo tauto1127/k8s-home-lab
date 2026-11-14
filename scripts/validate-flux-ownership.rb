@@ -690,7 +690,8 @@ def validate_activation_phase_contract!(activation, failures)
             ["flux-system", "memos"],
             ["flux-system", "n8n"],
             ["flux-system", "jellyfin"],
-            ["flux-system", "grafana"]
+            ["flux-system", "grafana"],
+            ["flux-system", "newspicks-to-reader"]
           ].include?(pair)
         else
           [
@@ -698,7 +699,8 @@ def validate_activation_phase_contract!(activation, failures)
             ["memos", "memos"],
             ["n8n", "n8n"],
             ["jellyfin", "jellyfin"],
-            ["grafana", "grafana-k8s-monitoring"]
+            ["grafana", "grafana-k8s-monitoring"],
+            ["newspicks-to-reader", "newspicks-to-reader"]
           ].include?(pair)
         end
       end
