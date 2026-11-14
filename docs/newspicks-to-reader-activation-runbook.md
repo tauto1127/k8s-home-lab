@@ -11,7 +11,7 @@ merge すると Flux が namespace / ExternalSecret / PVC / Deployment×2 / Serv
 
 preparation と同じ。image は digest 固定:
 
-`ghcr.io/tauto1127/newspicks-to-reader:0.1.0@sha256:4e4b31fa5e52a9cdb63b4757cf6225dced8a8d0713b4672f08f013922c8777b2`
+`ghcr.io/tauto1127/newspicks-to-reader:0.1.0@sha256:0f683355996e1e0097ac24ae30da9f6abed42702c6c8934f2152febf499e1679`
 
 ## 前提（merge 前に済ませる）
 
