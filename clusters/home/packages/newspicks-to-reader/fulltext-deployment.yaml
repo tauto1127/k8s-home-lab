@@ -33,15 +33,12 @@ spec:
           image: ghcr.io/tauto1127/newspicks-to-reader:0.1.0@sha256:265d6c106b46c956a5373087f679e987fcbe163694f7bc19ea8038ca69cd53b2
           imagePullPolicy: IfNotPresent
           # このイメージの Chromium は X が無いと起動できないため、仮想ディスプレイ配下で動かす。
+          # command に xvfb-run を置くと container の PID 1 が xvfb-run になり、
+          # SIGTERM で Xvfb が取り残されて PID 1 が終了しない。entrypoint で exec する。
           command:
-            - xvfb-run
-            - -a
-            - --server-args=-screen 0 1280x1024x24
-            - python
-            - fulltext.py
-            - --serve
-            - --port
-            - "8790"
+            - /bin/sh
+            - -c
+            - exec xvfb-run -a --server-args=-screen 0 1280x1024x24 python fulltext.py --serve --port 8790
           ports:
             - name: http
               containerPort: 8790
