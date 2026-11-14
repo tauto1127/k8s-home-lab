@@ -79,6 +79,9 @@ def launch(p, headless: bool):
         has_touch=True,
         # コンテナ内は root 扱いで動くため、Chromium の sandbox を無効化しないと起動しない。
         chromium_sandbox=False,
+        # 引数の --headless を明示する。headless オプションだけだと
+        # コンテナで X が無いときに The platform failed to initialize で落ちる。
+        args=["--headless=new"],
     )
     return ctx
 
