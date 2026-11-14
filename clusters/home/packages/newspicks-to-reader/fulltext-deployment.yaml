@@ -38,7 +38,7 @@ spec:
           command:
             - /bin/sh
             - -c
-            - exec xvfb-run -a --server-args=-screen 0 1280x1024x24 python fulltext.py --serve --port 8790
+            - exec xvfb-run -a --server-args="-screen 0 1280x1024x24" python fulltext.py --serve --port 8790
           ports:
             - name: http
               containerPort: 8790
