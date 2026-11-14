@@ -10,7 +10,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 # libatomic1 は playwright 同梱の node ドライバが要求する（slim イメージには入っていない）。
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl libatomic1 \
+        ca-certificates curl libatomic1 xvfb xauth \
     && rm -rf /var/lib/apt/lists/*
 
 # Playwright（Chromium）と OS 依存をまとめて入れる。
@@ -21,6 +21,8 @@ RUN pip install --no-cache-dir playwright && \
     python -m playwright install chromium && \
     rm -rf /var/lib/apt/lists/*
 
+# このコンテナの Chromium は X が無いと起動できない（headless 指定でも同じ）。
+# fulltext は xvfb-run 配下で起動する前提なので、Xvfb を入れておく。
 WORKDIR /app
 COPY np2reader.py fulltext.py ingest_server.py ./
 
