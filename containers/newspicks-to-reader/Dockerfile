@@ -10,13 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Playwright（Chromium）と OS 依存をまとめて入れる。
-# `--with-deps` は PATH 上の python を要求するため、install と install-deps を分け、
-# venv の python を PATH の先頭に置く。
-RUN python -m venv /opt/venv
-ENV PATH=/opt/venv/bin:$PATH
+# 公式 python イメージには venv が無い（ensurepip が無効化されている）ため venv は作らない。
+# install-deps は apt を実行するので root のまま先に入れる。
 RUN pip install --no-cache-dir playwright && \
-    python -m playwright install chromium && \
     python -m playwright install-deps chromium && \
+    python -m playwright install chromium && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
