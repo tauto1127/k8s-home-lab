@@ -18,7 +18,7 @@ iOS NewsPicks アプリ ─共有→ ショートカット
 ```
 
 - Namespace: `newspicks-to-reader`
-- Image: `ghcr.io/tauto1127/newspicks-to-reader:0.1.0@sha256:93b663e63882c885077b9282c5d1f954474cc29194eecd75a391a9aa6fdf1bd3`（`containers/newspicks-to-reader/` から GitHub Actions で build、digest は 2026-11-14 の main build）
+- Image: `ghcr.io/tauto1127/newspicks-to-reader:0.1.0@sha256:265d6c106b46c956a5373087f679e987fcbe163694f7bc19ea8038ca69cd53b2`（`containers/newspicks-to-reader/` から GitHub Actions で build、digest は 2026-11-14 の main build）
 - PVC: `newspicks-to-reader-profile`、`nfs-client`、2Gi、RWO（Playwright のプロファイル＝NewsPicks のログインセッションを保持）
 - Secret: `newspicks-to-reader-secrets`（ExternalSecret → ClusterSecretStore `secret-store-provider`）
   - `newspicks-to-reader-readwise-token` → `READWISE_TOKEN`

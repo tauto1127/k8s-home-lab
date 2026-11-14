@@ -30,9 +30,13 @@ spec:
           type: RuntimeDefault
       containers:
         - name: fulltext
-          image: ghcr.io/tauto1127/newspicks-to-reader:0.1.0@sha256:93b663e63882c885077b9282c5d1f954474cc29194eecd75a391a9aa6fdf1bd3
+          image: ghcr.io/tauto1127/newspicks-to-reader:0.1.0@sha256:265d6c106b46c956a5373087f679e987fcbe163694f7bc19ea8038ca69cd53b2
           imagePullPolicy: IfNotPresent
+          # このイメージの Chromium は X が無いと起動できないため、仮想ディスプレイ配下で動かす。
           command:
+            - xvfb-run
+            - -a
+            - --server-args=-screen 0 1280x1024x24
             - python
             - fulltext.py
             - --serve
