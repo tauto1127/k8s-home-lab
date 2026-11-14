@@ -27,7 +27,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: ingest
-          image: ghcr.io/tauto1127/newspicks-to-reader:0.1.0@sha256:bd879545f27047bf098c30b66dd73ed58f7961950b2a1084d3c6701a0c718c24
+          image: ghcr.io/tauto1127/newspicks-to-reader:0.1.0@sha256:93b663e63882c885077b9282c5d1f954474cc29194eecd75a391a9aa6fdf1bd3
           imagePullPolicy: IfNotPresent
           command:
             - python
