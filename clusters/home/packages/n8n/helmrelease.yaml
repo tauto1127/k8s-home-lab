@@ -129,14 +129,14 @@ spec:
         QUEUE_HEALTH_CHECK_ACTIVE:
           value: "true"
     extraManifests:
-      - apiVersion: external-secrets.io/v1beta1
+      - apiVersion: external-secrets.io/v1
         kind: ExternalSecret
         metadata:
           name: n8n-key
           namespace: n8n
         spec:
           secretStoreRef:
-            name: secret-store-provider
+            name: onepassword
             kind: ClusterSecretStore
           refreshInterval: "24h"
           target:
@@ -145,6 +145,5 @@ spec:
           data:
             - secretKey: n8n-key
               remoteRef:
-                key: n8n-key
-                version: latest
+                key: n8n-key/password
                 decodingStrategy: None
