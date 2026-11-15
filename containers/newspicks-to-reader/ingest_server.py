@@ -126,7 +126,7 @@ def main() -> int:
     if not Path(SCRIPT).exists():
         print(f"np2reader.py not found: {SCRIPT}", file=sys.stderr)
         return 2
-    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+    ThreadingHTTPServer((os.environ.get("NP2R_BIND", "0.0.0.0"), port), Handler).serve_forever()
     return 0
 
 
