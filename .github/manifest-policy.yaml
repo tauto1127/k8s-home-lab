@@ -56,10 +56,6 @@ renderedClusterAdminBindings:
 
 bootstrapManagedSources: []
 
-trekActivation:
-  stage: app-active
-  reason: TREK app activation enables the approved inner HelmRelease after configuration and GSM secret sync were verified.
-
 memosActivation:
   stage: app-active
   reason: Memos app activation adopts the existing Helm release after the outer Kustomization and Git chart contract were verified.
@@ -142,28 +138,6 @@ fluxActivation:
           kind: HelmRelease
           namespace: kube-system
           name: csi-secrets-store
-    - apiVersion: kustomize.toolkit.fluxcd.io/v1
-      kind: Kustomization
-      namespace: flux-system
-      name: trek
-      path: ./clusters/home/packages/trek
-      inventory:
-        - apiVersion: v1
-          kind: Namespace
-          namespace: ""
-          name: trek
-        - apiVersion: source.toolkit.fluxcd.io/v1
-          kind: HelmRepository
-          namespace: flux-system
-          name: trek
-        - apiVersion: external-secrets.io/v1beta1
-          kind: ExternalSecret
-          namespace: trek
-          name: trek-secrets
-        - apiVersion: helm.toolkit.fluxcd.io/v2
-          kind: HelmRelease
-          namespace: trek
-          name: trek
     - apiVersion: kustomize.toolkit.fluxcd.io/v1
       kind: Kustomization
       namespace: flux-system
@@ -370,26 +344,6 @@ fluxActivation:
       safety:
         disableHooks: true
         linuxCRDsEnabled: false
-    - apiVersion: helm.toolkit.fluxcd.io/v2
-      kind: HelmRelease
-      namespace: trek
-      name: trek
-      owner:
-        apiVersion: kustomize.toolkit.fluxcd.io/v1
-        kind: Kustomization
-        namespace: flux-system
-        name: trek
-      chart:
-        name: trek
-        version: 4.2.1
-        repository:
-          apiVersion: source.toolkit.fluxcd.io/v1
-          kind: HelmRepository
-          namespace: flux-system
-          name: trek
-          url: https://chart.liketrek.com
-      safety:
-        trekStage: app-active
     - apiVersion: helm.toolkit.fluxcd.io/v2
       kind: HelmRelease
       namespace: memos
