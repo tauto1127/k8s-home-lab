@@ -13,17 +13,17 @@ newspicks-to-reader の **preparation**。新規 workload なので adopt はな
 iOS NewsPicks アプリ ─共有→ ショートカット
   → https://newspicks-to-reader.takutk.com/ingest   (Kong Ingress)
     → Service/newspicks-to-reader-ingest:8787       (ingest_server.py)
-      → Service/newspicks-to-reader-fulltext:8790   (fulltext.py, Playwright 常駐)
+      → Service/newspicks-to-reader-fulltext:8790   (fulltext.py, 必要時に Chromium を起動)
         → Readwise Reader API /api/v3/save/
 ```
 
 - Namespace: `newspicks-to-reader`
-- Image: `ghcr.io/tauto1127/newspicks-to-reader:0.1.0@sha256:917378f6244b9d8b15f41d3ed28319cd9155da2f62cc9ea1ca5e05b8b849b360`（`containers/newspicks-to-reader/` から GitHub Actions で build、digest は 2026-11-14 の main build）
+- Image: `containers/newspicks-to-reader/` から GitHub Actions でビルドする。両 Deployment で同じイメージ digest を指定する。
 - PVC: `newspicks-to-reader-profile`、`nfs-client`、2Gi、RWO（Playwright のプロファイル＝NewsPicks のログインセッションを保持）
-- Secret: `newspicks-to-reader-secrets`（ExternalSecret → ClusterSecretStore `secret-store-provider`）
-  - `newspicks-to-reader-readwise-token` → `READWISE_TOKEN`
-  - `newspicks-to-reader-home-token` → `NP2R_HOME_TOKEN`
-  - `newspicks-to-reader-fulltext-token` → `NP2R_FULLTEXT_TOKEN`
+- Secret: `newspicks-to-reader-secrets`（ExternalSecret → ClusterSecretStore `onepassword`）
+  - `newspicks-to-reader-readwise-token/credential` → `READWISE_TOKEN`
+  - `newspicks-to-reader-home-token/password` → `NP2R_HOME_TOKEN`
+  - `newspicks-to-reader-fulltext-token/password` → `NP2R_FULLTEXT_TOKEN`
 - Ingress: `newspicks-to-reader.takutk.com`（class `kong`、TLS は既存の Kong に任せる）
 - 外部公開は Cloudflare Tunnel 側で `newspicks-to-reader.takutk.com` を受ける（別エージェントの作業）
 
@@ -35,9 +35,12 @@ iOS NewsPicks アプリ ─共有→ ショートカット
 2. Config activation（別PR）: 外側 `suspend: false`、marker を外す。namespace / PVC / ExternalSecret / Deployment が作られる。
    この時点で `fulltext` は起動するが、NewsPicks 未ログインなので `/fetch` は `not_logged_in` を返す。
 3. ログイン（手動 1 回）: `kubectl -n newspicks-to-reader port-forward deploy/newspicks-to-reader-fulltext 8790:8790` して
-   `POST /login/submit` に 1Password から取り出した認証情報を投げる、または VNC で Chromium を操作する。
+   `x-np2reader-token` に `NP2R_FULLTEXT_TOKEN` を指定し、`POST /login/submit` へ NewsPicks の認証情報を送る。
    以後は PVC 上のプロファイルで自動。パスワードは保存しない。
 4. iOS ショートカット作成（`docs/newspicks-to-reader-shortcut.md`）。
+
+稼働確認は両 Service の `GET /health`。NewsPicks のセッション確認は別に `GET /login/status` を使い、
+`fulltext` に直接接続する場合は `NP2R_FULLTEXT_TOKEN`、`ingest` 経由の場合は `NP2R_HOME_TOKEN` を指定する。
 
 ## ロールバック
 

@@ -6,13 +6,14 @@ ingest_server.py — 自宅サーバーの受け口。Worker（または iOS シ
   POST /ingest  {"path": "newsletter", "n": 1}
   GET  /health
   GET  /login/status            （fulltext のログイン状態を中継）
-  POST /login/submit            （1Password から受け取った email/password or cookies を中継）
+  POST /ingest  {"path": "login", ...}  （fulltext のログインを中継）
 
 中身は np2reader.py のサブプロセス呼び出しだけ。Readwise トークンと NewsPicks の
 ログインはこのプロセスの環境変数にだけ置く（Worker 側には置かない）。
 
 環境変数:
   NP2R_HOME_TOKEN   必須。Worker と共有する認証トークン
+  NP2R_BIND         待ち受けアドレス（既定: 0.0.0.0）
   NP2R_SCRIPT       np2reader.py のパス（既定: このファイルと同じディレクトリ）
   READWISE_TOKEN / NP2R_FULLTEXT_ENDPOINT / NP2R_FULLTEXT_TOKEN / NP2R_LOCATION / NP2R_TAGS
 """
@@ -110,6 +111,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/health":
             return self._reply(200, {"ok": True, "script": SCRIPT, "fulltext": bool(FULLTEXT)})
         if path == "/login/status":
+            if self.headers.get("x-np2reader-token") != TOKEN:
+                return self._reply(401, {"ok": False, "error": "unauthorized"})
             code, payload = fulltext_call("GET", "/login/status")
             return self._reply(code, payload)
         return self._reply(404, {"ok": False, "error": "not found"})
@@ -126,7 +129,7 @@ def main() -> int:
     if not Path(SCRIPT).exists():
         print(f"np2reader.py not found: {SCRIPT}", file=sys.stderr)
         return 2
-    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+    ThreadingHTTPServer((os.environ.get("NP2R_BIND", "0.0.0.0"), port), Handler).serve_forever()
     return 0
 
 
