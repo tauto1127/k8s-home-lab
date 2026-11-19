@@ -34,14 +34,27 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 
 READWISE_SAVE = "https://readwise.io/api/v3/save/"
 NEWSPICKS = "https://newspicks.com"
 NEWSLETTER_TOPIC = "newspicks-newsletter"
 JST = timezone(timedelta(hours=9))
+
+
+def article_id(url: str) -> str | None:
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError:
+        return None
+    if parsed.scheme != "https" or parsed.netloc != "newspicks.com":
+        return None
+    match = re.fullmatch(r"/news(?:-in-app)?/([0-9]+)(?:/(?:body/?)?)?", parsed.path)
+    return match[1] if match else None
 
 # NewsPicks は PC の UA だと 403 を返すことがある。モバイル Safari の UA で SSR 済み HTML を取る。
 UA = (
@@ -150,6 +163,11 @@ def parse_article(news_id: str, cookie: str | None = None) -> Article:
     news = find_news(root) or {}
 
     art.title = (news.get("title") or "").strip()
+    art.author = "、".join(
+        author["displayName"].strip()
+        for author in news.get("authors") or []
+        if isinstance(author, dict) and (author.get("displayName") or "").strip()
+    )
     art.summary = _strip_tags(news.get("summary") or "")
     art.image = news.get("image") or ""
     art.published = _iso(news.get("publishedAt"))
@@ -194,17 +212,6 @@ def parse_article(news_id: str, cookie: str | None = None) -> Article:
             art.body_html = "".join(f"<p>{htmllib.escape(line)}</p>" for line in desc.splitlines() if line.strip())
         art.notes.append("動画コンテンツのため本文 HTML はありません（番組概要のみ）")
 
-    # 著者（newsBody ページの JSON-LD には author が無いので、HTML 上のプロフィールから拾う）
-    if not art.author:
-        m = re.search(r'<a href="https://newspicks\.com/user/\d+"[^>]*>\s*<img[^>]*>', page)
-        m2 = re.search(r'class="author-name"[^>]*>([^<]+)<', page) or re.search(
-            r'"authors":\[\{"__typename":"User","userId":\d+,"displayName":"([^"]+)"', page
-        )
-        if m2:
-            art.author = htmllib.unescape(m2.group(1)).strip()
-        elif m:
-            art.author = ""
-
     if not art.title:
         m = re.search(r"<title>(.*?)</title>", page, re.S)
         art.title = htmllib.unescape(m.group(1)).split(" - ")[0].strip() if m else f"NewsPicks {news_id}"
@@ -228,27 +235,90 @@ def parse_newsletter(limit: int = 5, cookie: str | None = None) -> list[dict]:
 # --------------------------------------------------------------------------- #
 # Reader 用 HTML の整形
 # --------------------------------------------------------------------------- #
-KEEP_ATTRS = {"href", "src", "alt", "srcset", "width", "height"}
+ARTICLE_TAGS = frozenset("""
+    a article b blockquote br caption code dd del div dl dt em figcaption figure
+    h1 h2 h3 h4 h5 h6 hr i img li ol p picture pre rp rt ruby s small source span
+    strong sub sup table tbody td th thead tr u ul
+""".split())
+VOID_TAGS = frozenset({"br", "hr", "img", "source"})
+DROP_CONTENT = frozenset({"iframe", "noscript", "object", "script", "style", "svg", "template"})
+ARTICLE_ATTRS = {
+    "a": {"href"},
+    "img": {"src", "srcset", "alt", "width", "height"},
+    "source": {"srcset", "media", "type"},
+    "td": {"colspan", "rowspan"},
+    "th": {"colspan", "rowspan"},
+}
 
 
-def sanitize(fragment: str) -> str:
-    """script/style/iframe を落とし、属性を絞る（Reader 側のクリーニングと相性を良くするため）。"""
-    fragment = re.sub(r"<script\b.*?</script>", "", fragment, flags=re.S | re.I)
-    fragment = re.sub(r"<style\b.*?</style>", "", fragment, flags=re.S | re.I)
-    fragment = re.sub(r"<noscript\b.*?</noscript>", "", fragment, flags=re.S | re.I)
+class ArticleHTML(HTMLParser):
+    def __init__(self, base_url: str):
+        super().__init__()
+        self.base_url = base_url
+        self.output: list[str] = []
+        self.dropped: list[str] = []
 
-    def clean_tag(m: re.Match) -> str:
-        closing, name, attrs = m.group(1), m.group(2).lower(), m.group(3)
-        if closing:
-            return f"</{name}>"
-        kept = re.findall(r'([a-zA-Z-]+)\s*=\s*"([^"]*)"', attrs)
-        out = " ".join(f'{k}="{v}"' for k, v in kept if k.lower() in KEEP_ATTRS)
-        return f"<{name}{(' ' + out) if out else ''}>"
+    def _url(self, value: str) -> str:
+        if not value.strip():
+            return ""
+        try:
+            absolute = urllib.parse.urljoin(self.base_url, value)
+            parsed = urllib.parse.urlsplit(absolute)
+        except ValueError:
+            return ""
+        return absolute if parsed.scheme in {"http", "https"} and parsed.netloc else ""
 
-    fragment = re.sub(r"<(/?)([a-zA-Z][a-zA-Z0-9]*)([^>]*)>", clean_tag, fragment)
-    # 空の div / p を整理
-    fragment = re.sub(r"<(p|div)>\s*</\1>", "", fragment)
-    return fragment.strip()
+    def handle_starttag(self, tag, attrs):
+        if tag in DROP_CONTENT:
+            self.dropped.append(tag)
+        if self.dropped or tag not in ARTICLE_TAGS:
+            return
+        kept = []
+        for key, value in attrs:
+            if value is None or key not in ARTICLE_ATTRS.get(tag, ()):
+                continue
+            if key in {"href", "src"}:
+                value = self._url(value)
+                if not value:
+                    continue
+            elif key == "srcset":
+                candidates = []
+                while value := value.lstrip(" ,\t\r\n\f"):
+                    url, *rest = value.split(maxsplit=1)
+                    value = rest[0] if rest else ""
+                    descriptor = ""
+                    if url.endswith(","):
+                        url = url.rstrip(",")
+                    else:
+                        descriptor, _, value = value.partition(",")
+                        descriptor = descriptor.strip()
+                    resolved = self._url(url)
+                    if resolved and (not descriptor or re.fullmatch(r"\d+(?:\.\d+)?[wx]", descriptor)):
+                        candidates.append(f"{resolved} {descriptor}".rstrip())
+                value = ", ".join(candidates)
+                if not value:
+                    continue
+            kept.append(f' {key}="{htmllib.escape(value, quote=True)}"')
+        self.output.append(f"<{tag}{''.join(kept)}>")
+
+    def handle_endtag(self, tag):
+        if self.dropped:
+            if tag == self.dropped[-1]:
+                self.dropped.pop()
+        elif tag in ARTICLE_TAGS and tag not in VOID_TAGS:
+            self.output.append(f"</{tag}>")
+
+    def handle_data(self, data):
+        if not self.dropped:
+            self.output.append(htmllib.escape(data, quote=False))
+
+
+def sanitize(fragment: str, base_url: str) -> str:
+    """Reader に渡す HTML から実行可能な要素と属性を除く。"""
+    parser = ArticleHTML(base_url)
+    parser.feed(fragment)
+    parser.close()
+    return "".join(parser.output).strip()
 
 
 def build_reader_html(art: Article) -> str:
@@ -261,13 +331,13 @@ def build_reader_html(art: Article) -> str:
         parts.append(
             f'<p><a href="{htmllib.escape(art.external_url, quote=True)}">元記事を開く（{htmllib.escape(art.external_url)}）</a></p>'
         )
-    parts.append(sanitize(art.body_html))
+    parts.append(art.body_html)
     if art.notes:
         parts.append("<hr>")
         parts.append("<p><strong>取得メモ</strong></p><ul>")
         parts.extend(f"<li>{htmllib.escape(n)}</li>" for n in art.notes)
         parts.append("</ul>")
-    return "\n".join(p for p in parts if p)
+    return sanitize("<article>" + "\n".join(p for p in parts if p) + "</article>", art.url)
 
 
 def enrich_with_browser(art: Article, endpoint: str, token: str, timeout: int = 180) -> Article:
@@ -285,21 +355,35 @@ def enrich_with_browser(art: Article, endpoint: str, token: str, timeout: int = 
     try:
         with urllib.request.urlopen(req, timeout=timeout) as res:
             data = json.loads(res.read().decode() or "{}")
+    except urllib.error.HTTPError as e:
+        try:
+            error = json.load(e).get("error") or f"HTTP {e.code}"
+        except (ValueError, AttributeError):
+            error = f"HTTP {e.code}"
+        art.notes.append(f"ブラウザ取得に失敗（冒頭のみ）: {error}")
+        return art
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
         art.notes.append(f"ブラウザ取得に失敗（冒頭のみ）: {e}")
         return art
 
-    if not data.get("ok"):
-        art.notes.append(f"ブラウザ取得に失敗（冒頭のみ）: {data.get('error') or data.get('hint')}")
+    body = data.get("html")
+    news_id = article_id(art.url)
+    if not (
+        news_id is not None
+        and data.get("news_id") == news_id
+        and data.get("ok") is True
+        and data.get("complete") is True
+        and isinstance(body, str)
+        and body.strip()
+    ):
+        art.notes.append("ブラウザから完全な本文を取得できなかったため冒頭のみ")
         return art
 
-    art.body_html = data["html"]
+    art.body_html = body
     art.fulltext = True
-    art.truncated = not data.get("complete", True)
+    art.truncated = False
     art.title = art.title or data.get("title", "")
     art.notes = [n for n in art.notes if "プレミアム会員限定" not in n]
-    if art.truncated:
-        art.notes.append("ブラウザで取得したが、ページ上に課金の壁が残っていた")
     return art
 
 
@@ -307,8 +391,10 @@ def save_to_reader(art: Article, token: str, location: str, tags: list[str], dry
     payload = {
         "url": art.url,
         "html": build_reader_html(art),
-        "should_clean_html": True,
+        "should_clean_html": False,
         "title": art.title,
+        # Reader requires an author and title when automatic cleaning is disabled.
+        "author": art.author or "不明",
         "summary": art.summary[:1000] if art.summary else None,
         "location": location,
         "category": "article",
@@ -316,8 +402,6 @@ def save_to_reader(art: Article, token: str, location: str, tags: list[str], dry
         "tags": tags,
         "language": "ja",
     }
-    if art.author:
-        payload["author"] = art.author
     if art.published:
         payload["published_date"] = art.published
     if art.image:

@@ -52,4 +52,5 @@ PVC は `Retain` 相当で残るため、再開時にログインをやり直す
 - 画像は amd64 のみ。クラスタは amd64 ノードのみなので問題ない。
 - Playwright は 1 ブラウザ・1 記事ずつ。`Recreate` 戦略で並列化しない（bot 判定回避）。
 - プレミアム本文の取得は「自分の購読で読める内容を自分の Reader に送る」用途に限定する。
-- NewsPicks 側の仕様変更で壊れたら `extract_body_html()` のセレクタを直す。
+- プレミアム本文は、ログイン済みの `/news/<id>/body/` の `newsBodyPageContents.newsBody` から取得する。概要ページやコメントで代用しない。
+- Reader 側で本文を自動抽出し直さない。保存を検証するときは `list` API の `html_content` を記事後半の見出し・本文と照合する。

@@ -3,14 +3,13 @@
 fulltext.py — プレミアム記事の「残り」をブラウザで取る部分だけを分離した常駐ワーカー。
 
 np2reader.py（SSR 取得）で本文が足りない記事だけをここに回す。
-Playwright の永続プロファイル（= あなたの NewsPicks ログイン済みセッション）を使い、
-記事ページを実際に描画して本文 DOM を丸ごと抜き、Reader 用の HTML に詰め替える。
+Playwright の永続プロファイル（NewsPicks ログイン済みセッション）で記事の
+本文ページを開き、NewsPicks が返した記事本文だけを取り出す。
 
 設計方針（Readform / readwise-full-content と同じ発想）:
   - ログインは「手動 1 回だけ」。プロファイルに Cookie が残るので以後は自動。
   - パスワードは保存しない。1Password は初回ログインのときだけ人が使う。
-  - ヘッドレスで通らない場合は headful（xvfb）にフォールバック。
-  - 1 記事ずつ、人間のペース（数秒待ち・スクロール）で処理する。並列化しない。
+  - 永続プロファイルを使う処理は直列に実行する。
 
 使い方:
   # 初回だけ（画面のあるマシンで実行し、ブラウザで手動ログイン）
@@ -24,35 +23,22 @@ Playwright の永続プロファイル（= あなたの NewsPicks ログイン�
 
 環境変数:
   NP2R_PROFILE   Playwright のプロファイル置き場（既定: ~/.local/share/np2reader/profile）
-  NP2R_HEADLESS  1 なら headless（既定 1）。Cloudflare に弾かれる場合 0 + xvfb-run
+  NP2R_HEADLESS  1 なら headless（既定 1）
 """
 
 from __future__ import annotations
 
 import argparse
-import html as htmllib
 import json
 import os
 import re
 import sys
-import time
 from pathlib import Path
 from threading import Lock
 
+from np2reader import NEWSPICKS, apollo_root, article_id, next_data
+
 DEFAULT_PROFILE = Path(os.environ.get("NP2R_PROFILE", Path.home() / ".local/share/np2reader/profile"))
-ARTICLES = [
-    "#body .original-v2",  # 通常記事（プレミアム含む）
-    "#body",               # フォールバック
-    "main",
-    "article",
-]
-# 本文に入ってきたら落とすもの（ナビ・シェア・関連記事・コメント・課金導線）
-DROP_SELECTORS = [
-    "script", "style", "noscript", "iframe",
-    ".paging-container", ".twitter-share-button", ".share", ".sns",
-    ".next-article", ".prev-article", ".related", ".comment", ".comments",
-    "header", "footer", "nav",
-]
 
 
 def _import_playwright():
@@ -99,24 +85,6 @@ def launch(p, headless: bool):
     return ctx
 
 
-def human_pause(lo: float = 1.5, hi: float = 3.5) -> None:
-    import random
-    time.sleep(random.uniform(lo, hi))
-
-
-def scroll_through(page) -> None:
-    """遅延読み込み画像を起こすため、ゆっくり最後までスクロールする。"""
-    height = page.evaluate("Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)")
-    y = 0
-    while y < height:
-        y += 600
-        page.evaluate(f"window.scrollTo(0, {y})")
-        time.sleep(0.35)
-        height = page.evaluate("Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)")
-    page.evaluate("window.scrollTo(0, 0)")
-    time.sleep(0.5)
-
-
 def is_logged_in(page) -> bool:
     """ヘッダに「ログイン」ボタンが出ているかで判定（NewsPicks は未ログイン時に出る）。"""
     try:
@@ -126,53 +94,64 @@ def is_logged_in(page) -> bool:
     return "ログイン" not in txt
 
 
-def extract_body_html(page) -> tuple[str, bool]:
-    """本文 DOM を取得。プレミアムの壁が消えているか（=全文取れたか）も返す。"""
-    for sel in ARTICLES:
-        node = page.query_selector(sel)
-        if not node:
+def _article_query(root: dict, name: str, news_id: str) -> dict:
+    prefix = name + "("
+    for key, value in root.items():
+        if not (key.startswith(prefix) and key.endswith(")") and isinstance(value, dict)):
             continue
-        html = node.evaluate(
-            """(el, drop) => {
-                const clone = el.cloneNode(true);
-                for (const s of drop) clone.querySelectorAll(s).forEach(n => n.remove());
-                return clone.innerHTML;
-            }""",
-            DROP_SELECTORS,
-        )
-        text = re.sub(r"\s+", "", re.sub(r"<[^>]+>", "", html))
-        wall = "プレミアム会員限定" in text or "残り" in text and "文字" in text
-        if len(text) > 200:
-            return html, not wall
-    return "", False
+        try:
+            args = json.loads(key[len(prefix):-1])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(args, dict) and str(args.get("newsId")) == news_id:
+            return value
+    return {}
+
+
+def extract_body_html(page_html: str, news_id: str) -> str:
+    """指定記事について、閲覧許可と残り文字数を確認できた本文だけを返す。"""
+    root = apollo_root(next_data(page_html) or {})
+    news = _article_query(root, "news", news_id)
+    if str(news.get("newsId")) != news_id or news.get("permitted") is not True:
+        return ""
+    contents = _article_query(root, "newsBodyPageContents", news_id)
+    body = contents.get("newsBody") or {}
+    html = body.get("body")
+    if not isinstance(html, str) or not html.strip() or "remainingCharCount" not in body:
+        return ""
+    remaining = body["remainingCharCount"]
+    return html if remaining is None or (type(remaining) is int and remaining == 0) else ""
 
 
 def fetch(url: str, headless: bool = True, timeout_ms: int = 45000) -> dict:
+    news_id = article_id(url)
+    if news_id is None:
+        return {"ok": False, "error": "not a NewsPicks article URL"}
+    body_url = f"{NEWSPICKS}/news/{news_id}/body/"
     sync_playwright = _import_playwright()
     with sync_playwright() as p:
         ctx = launch(p, headless)
         try:
             page = ctx.new_page()
-            page.goto("https://newspicks.com/", wait_until="domcontentloaded", timeout=timeout_ms)
-            human_pause()
+            response = page.goto(body_url, wait_until="domcontentloaded", timeout=timeout_ms)
+            if response is None or not response.ok or response.url.rstrip("/") != body_url.rstrip("/"):
+                return {"ok": False, "error": "article_body_unavailable"}
+
             logged_in = is_logged_in(page)
             if not logged_in:
-                return {"ok": False, "error": "not_logged_in", "hint": "python3 fulltext.py --login でログインしてください"}
-
-            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-            human_pause(2.0, 4.0)
-            scroll_through(page)
-
-            body_html, complete = extract_body_html(page)
-            title = page.title().split(" - ")[0].strip()
+                return {"ok": False, "error": "not_logged_in"}
+            body = extract_body_html(response.text(), news_id)
+            if not body:
+                return {"ok": False, "error": "article_body_incomplete"}
             return {
-                "ok": bool(body_html),
+                "ok": True,
                 "url": url,
-                "title": title,
+                "news_id": news_id,
+                "title": page.title().split(" - ")[0].strip(),
                 "logged_in": logged_in,
-                "complete": complete,
-                "html": body_html,
-                "chars": len(re.sub(r"\s+", "", re.sub(r"<[^>]+>", "", body_html))),
+                "complete": True,
+                "html": body,
+                "chars": len(re.sub(r"\s+", "", re.sub(r"<[^>]+>", "", body))),
             }
         finally:
             ctx.close()
@@ -283,7 +262,7 @@ def serve(port: int, headless: bool) -> None:
                 return self._json(404, {"ok": False, "error": "not found"})
 
             url = req.get("url", "")
-            if not re.search(r"newspicks\.com/news/\d+", url):
+            if not isinstance(url, str) or article_id(url) is None:
                 return self._json(400, {"ok": False, "error": "not a NewsPicks article URL"})
             try:
                 with profile_lock:

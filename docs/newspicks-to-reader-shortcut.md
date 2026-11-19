@@ -51,7 +51,8 @@ curl -sS -X POST https://newspicks-to-reader.takutk.com/ingest \
   -d '{"path":"save","url":"https://newspicks.com/news/17906125/"}'
 ```
 
-`[fulltext via browser]` が返ればプレミアム本文まで取れている。`[partial: paywall]` ならログインが切れている。
+`[fulltext via browser]` は送信元で全文を取得したことを示す。返された Reader のリンクを開き、記事後半の本文まで表示されることを確認する。
+`[partial: paywall]` は冒頭のみの保存。ログイン状態と NewsPicks の購読権限を確認する。
 
 ## トークンの扱い
 
