@@ -1035,6 +1035,10 @@ def validate_activation_chart_policy!(policy, identity, failures, artifact_cache
 
   safety = policy.fetch("safety", {})
   raise "active HelmRelease #{identity}: safety policy must be a mapping" unless safety.is_a?(Hash)
+  unknown_safety_keys = safety.keys - %w[installCRDs bitwardenSdkServerEnabled linuxCRDsEnabled disableHooks activationStage]
+  unless unknown_safety_keys.empty?
+    failures << "active HelmRelease #{identity}: unsupported safety keys: #{unknown_safety_keys.join(', ')}"
+  end
   if safety.key?("installCRDs") && ![true, false].include?(safety["installCRDs"])
     failures << "active HelmRelease #{identity}: safety.installCRDs must be a boolean"
   end
@@ -1046,9 +1050,6 @@ def validate_activation_chart_policy!(policy, identity, failures, artifact_cache
   end
   if safety.key?("disableHooks") && ![true, false].include?(safety["disableHooks"])
     failures << "active HelmRelease #{identity}: safety.disableHooks must be a boolean"
-  end
-  if safety.key?("trekStage") && !%w[config-active app-active].include?(safety["trekStage"])
-    failures << "active HelmRelease #{identity}: safety.trekStage must be config-active or app-active"
   end
   if safety.key?("activationStage") && !%w[config-active app-active].include?(safety["activationStage"])
     failures << "active HelmRelease #{identity}: safety.activationStage must be config-active or app-active"
