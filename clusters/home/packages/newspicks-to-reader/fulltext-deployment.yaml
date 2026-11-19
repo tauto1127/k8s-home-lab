@@ -30,7 +30,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: fulltext
-          image: ghcr.io/tauto1127/newspicks-to-reader:0.1.0@sha256:cb5bc0229a41d4726a4aa7e4d9ef69a2f30b33fdaecf9fb4b2d8921915dc8b0e
+          image: ghcr.io/tauto1127/newspicks-to-reader:0.1.0@sha256:4755c32c83155f5a3ab0bd273fd87c8d71cee1d50a6f1335d186a765235ba5a8
           imagePullPolicy: IfNotPresent
           command:
             - python
