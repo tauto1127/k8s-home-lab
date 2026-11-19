@@ -1,36 +1,40 @@
 # newspicks-to-reader の現状と残作業
 
-最終更新: 2026-11-14
-
 ## いまの状態
 
-| 項目 | 状態 |
-|---|---|
-| Flux パッケージ | **app-active**（`suspend: false`）。#71 で追加、#73 で活性化 |
-| image | `ghcr.io/tauto1127/newspicks-to-reader:0.1.0@sha256:917378f6244b9d8b15f41d3ed28319cd9155da2f62cc9ea1ca5e05b8b849b360` |
-| Namespace / PVC / Ingress / Service | 作成済み（PVC は Bound、Ingress は Kong で `newspicks-to-reader.takutk.com`） |
-| `ingest` | コンテナは起動する（`/health` 応答を確認済み）。Secret 未作成のため `CreateContainerConfigError` |
-| `fulltext` | Chromium 起動まで到達（`xvfb-run` 経由、`/health` が `{"ok": true, "logged_in": false}` を返すことを確認済み）。Secret 未作成のため待機中 |
+- Flux パッケージは有効化済み。`ExternalSecret/newspicks-to-reader-secrets` は 1Password の 3 項目を同期する。
+- `ingest` は Pod の IP で待ち受ける。`fulltext` はヘッドレスで動き、ログイン・ログイン状態確認・記事取得のときだけ永続プロファイルを開く。
+- 両方の `/health` は認証不要。`fulltext` の `/health` は NewsPicks のログイン状態とは独立して `{"ok": true}` を返す。
 
-## ブロッカー（この2つで動き出す）
+## クラスタ外から使う前に
 
-1. **GSM に remote secret 3 件を作成**
-   - `newspicks-to-reader-readwise-token` … https://readwise.io/access_token
-   - `newspicks-to-reader-home-token` … 任意のランダム文字列（Worker と共有）
-   - `newspicks-to-reader-fulltext-token` … 任意のランダム文字列
-   `ExternalSecret/newspicks-to-reader-secrets` が `SecretSynced` になれば Pod が起動する。
-
-2. **Cloudflare Tunnel に `newspicks-to-reader.takutk.com` → `http://192.168.11.211:80`（Kong）を追加**
+**Cloudflare Tunnel に `newspicks-to-reader.takutk.com` → `http://192.168.11.211:80`（Kong）を追加する。**
 
 ## そのあと
 
-1. 初回ログイン（手動 1 回）
+1. 初回ログインは公開経路がなくてもできる。別ターミナルでポート転送を起動する。
    ```sh
    kubectl -n newspicks-to-reader port-forward deploy/newspicks-to-reader-fulltext 8790:8790
-   curl -sS localhost:8790/login/status -H "x-np2reader-token: $NP2R_FULLTEXT_TOKEN"
-   curl -sS -X POST localhost:8790/login/submit \
-     -H "x-np2reader-token: $NP2R_FULLTEXT_TOKEN" -H "content-type: application/json" \
-     -d '{"email":"...","password":"..."}'
+   ```
+   元のターミナルで実行し、NewsPicks の認証情報を入力する。パスワードは端末に表示されない。
+   ```sh
+   python3 - <<'PY'
+   import base64, getpass, json, subprocess, urllib.request
+
+   token = base64.b64decode(subprocess.check_output([
+       "kubectl", "-n", "newspicks-to-reader", "get", "secret",
+       "newspicks-to-reader-secrets", "-o", "jsonpath={.data.NP2R_FULLTEXT_TOKEN}",
+   ])).decode()
+   body = json.dumps({
+       "email": getpass.getpass("NewsPicks email: "),
+       "password": getpass.getpass("NewsPicks password: "),
+   }).encode()
+   request = urllib.request.Request("http://127.0.0.1:8790/login/submit", body, {
+       "content-type": "application/json", "x-np2reader-token": token,
+   })
+   with urllib.request.urlopen(request, timeout=180) as response:
+       print(response.read().decode())
+   PY
    ```
 2. iOS ショートカット作成（`docs/newspicks-to-reader-shortcut.md`）
 3. 疎通確認
@@ -49,12 +53,11 @@
 | `libatomic.so.1` が無い | slim イメージに無い | `libatomic1` を apt で追加 |
 | `Executable doesn't exist at /home/np2r/.cache/...` | ブラウザは root の `/root/.cache` に入る | `PLAYWRIGHT_BROWSERS_PATH=/ms-playwright` |
 | `/root` 配下が読めない | `/root` は 0700 | 共有パスへ |
-| `Missing X server or $DISPLAY` | このイメージの Chromium は X 必須 | `xvfb` を入れ、`xvfb-run` 配下で起動 |
-| `xvfb-run: 0: not found` | `sh -c` で `--server-args` の値が分割 | 値を引用符で囲む |
-| コンテナが終了しない | `command` に xvfb-run を置くと PID 1 になる | `exec xvfb-run ...` |
-| `profile appears to be in use` | PVC に SingletonLock が残る | 起動時に `Singleton*` を削除（実装済み） |
+| `ingest` の `/health` に Pod IP から接続できない | ループバックだけで待ち受けていた | コンテナでは `0.0.0.0` で待ち受ける |
+| `fulltext` が Python を起動する前に止まる | PID 1 の `xvfb-run` が Xvfb の起動通知を待ち続ける | Xvfb を使わず Python を直接起動する |
+| `fulltext` の `/health` が 401 | 以前は認証が必要だった | `/health` を認証なしで返し、認証付きの `/login/status` でログインを確認する |
+| `profile appears to be in use` | PVC に Chromium のロックが残る | プロファイルを直列で開き、起動時に古い `Singleton*` を削除する |
 
 ## 注意
 
-- `fulltext` は 1 ブラウザ・1 記事ずつ。並列化しないこと（bot 判定とプロファイルロックの両方で壊れる）。
-- 検証時は Secret を差し替えると Deployment が Flux に巻き戻される。一時的な検証は `kubectl patch` を都度当て直す。
+- `fulltext` は 1 Pod で運用する。`Recreate` とリクエストの直列化で、同じ Chromium プロファイルの同時起動を防ぐ。
