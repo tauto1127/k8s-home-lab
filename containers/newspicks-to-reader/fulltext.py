@@ -205,15 +205,13 @@ def remote_submit(payload: dict, headless: bool) -> dict:
             page = ctx.new_page()
             if cookies:
                 ctx.add_cookies(cookies)
+                page.goto("https://newspicks.com/", wait_until="domcontentloaded")
             else:
-                page.goto("https://newspicks.com/login", wait_until="domcontentloaded")
-                page.fill('input[type="email"], input[name="email"]', email)
-                page.click('button[type="submit"], button:has-text("次へ"), button:has-text("ログイン")')
-                page.fill('input[type="password"], input[name="password"]', password)
-                page.click('button[type="submit"], button:has-text("ログイン")')
-                page.wait_for_load_state("domcontentloaded")
-                human_pause(2.0, 3.0)
-            page.goto("https://newspicks.com/", wait_until="domcontentloaded")
+                page.goto("https://newspicks.com/login-page/?path=%2F", wait_until="domcontentloaded")
+                page.locator('input[type="email"]').fill(email)
+                page.locator('input[type="password"]').fill(password)
+                page.get_by_role("button", name="ログイン", exact=True).click()
+                page.wait_for_url("https://newspicks.com/", wait_until="domcontentloaded")
             ok = is_logged_in(page)
             return {"ok": ok, "state": "logged_in" if ok else "failed"}
         finally:
