@@ -37,6 +37,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from threading import Lock
 
 DEFAULT_PROFILE = Path(os.environ.get("NP2R_PROFILE", Path.home() / ".local/share/np2reader/profile"))
 ARTICLES = [
@@ -93,9 +94,7 @@ def launch(p, headless: bool):
         has_touch=True,
         # コンテナ内は root 扱いで動くため、Chromium の sandbox を無効化しないと起動しない。
         chromium_sandbox=False,
-        # 引数の --headless を明示する。headless オプションだけだと
-        # コンテナで X が無いときに The platform failed to initialize で落ちる。
-        args=["--headless=new"],
+        args=["--headless=new"] if headless else [],
     )
     return ctx
 
@@ -192,92 +191,54 @@ def login() -> None:
         ctx.close()
 
 
-# --------------------------------------------------------------------------- #
-# 遠隔ログイン（クラスタ運用向け）
-#   ブラウザの画面を /login に VNC で映し、/login/submit で 1Password から
-#   受け取った値（または Cookie）を流し込む。パスワードは保存しない。
-# --------------------------------------------------------------------------- #
-_remote: dict = {"page": None, "ctx": None, "playwright": None, "state": "idle", "message": ""}
+def remote_submit(payload: dict, headless: bool) -> dict:
+    """認証情報または Cookie を永続プロファイルに反映する。パスワードは保存しない。"""
+    cookies = payload.get("cookies")
+    email, password = payload.get("email"), payload.get("password")
+    if not cookies and not (email and password):
+        return {"ok": False, "error": "email and password are required"}
 
-
-def remote_start(port: int, headless: bool) -> None:
     sync_playwright = _import_playwright()
-    p = sync_playwright().start()
-    ctx = p.chromium.launch_persistent_context(
-        str(DEFAULT_PROFILE),
-        headless=headless,
-        locale="ja-JP",
-        timezone_id="Asia/Tokyo",
-        viewport={"width": 430, "height": 932},
-        user_agent=(
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) "
-            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
-        ),
-        is_mobile=True,
-        has_touch=True,
-        args=[f"--remote-debugging-port={port}", "--remote-debugging-address=127.0.0.1"],
-    )
-    page = ctx.pages[0] if ctx.pages else ctx.new_page()
-    page.goto("https://newspicks.com/", wait_until="domcontentloaded")
-    _remote.update(page=page, ctx=ctx, playwright=p, state="idle", message="")
-
-
-def remote_submit(payload: dict) -> dict:
-    """ログイン情報を流し込む。payload は以下のいずれか:
-      {"email": ..., "password": ...}   フォーム入力
-      {"cookies": [{name, value, domain, path}, ...]}   セッション移行
-    """
-    page = _remote.get("page")
-    if page is None:
-        return {"ok": False, "error": "browser not started"}
-    try:
-        if payload.get("cookies"):
-            _remote["ctx"].add_cookies(payload["cookies"])
+    with sync_playwright() as p:
+        ctx = launch(p, headless)
+        try:
+            page = ctx.new_page()
+            if cookies:
+                ctx.add_cookies(cookies)
+            else:
+                page.goto("https://newspicks.com/login", wait_until="domcontentloaded")
+                page.fill('input[type="email"], input[name="email"]', email)
+                page.click('button[type="submit"], button:has-text("次へ"), button:has-text("ログイン")')
+                page.fill('input[type="password"], input[name="password"]', password)
+                page.click('button[type="submit"], button:has-text("ログイン")')
+                page.wait_for_load_state("domcontentloaded")
+                human_pause(2.0, 3.0)
             page.goto("https://newspicks.com/", wait_until="domcontentloaded")
             ok = is_logged_in(page)
-            _remote.update(state="logged_in" if ok else "failed", message="cookies applied")
-            return {"ok": ok, "state": _remote["state"]}
-
-        email, password = payload.get("email"), payload.get("password")
-        if not email or not password:
-            return {"ok": False, "error": "email and password are required"}
-
-        page.goto("https://newspicks.com/login", wait_until="domcontentloaded")
-        page.fill('input[type="email"], input[name="email"]', email)
-        page.click('button[type="submit"], button:has-text("次へ"), button:has-text("ログイン")')
-        human_pause(1.0, 2.0)
-        page.fill('input[type="password"], input[name="password"]', password)
-        page.click('button[type="submit"], button:has-text("ログイン")')
-        page.wait_for_load_state("domcontentloaded")
-        human_pause(2.0, 3.0)
-        ok = is_logged_in(page)
-        _remote.update(state="logged_in" if ok else "failed", message="password login")
-        return {"ok": ok, "state": _remote["state"]}
-    except Exception as e:  # noqa: BLE001
-        _remote.update(state="failed", message=str(e))
-        return {"ok": False, "error": str(e)}
+            return {"ok": ok, "state": "logged_in" if ok else "failed"}
+        finally:
+            ctx.close()
 
 
-def remote_status() -> dict:
-    page = _remote.get("page")
-    logged_in = False
-    if page is not None:
+def remote_status(headless: bool) -> dict:
+    sync_playwright = _import_playwright()
+    with sync_playwright() as p:
+        ctx = launch(p, headless)
         try:
+            page = ctx.new_page()
+            page.goto("https://newspicks.com/", wait_until="domcontentloaded")
             logged_in = is_logged_in(page)
-        except Exception:
-            logged_in = False
-    return {"ok": True, "state": _remote["state"], "logged_in": logged_in, "message": _remote["message"]}
+            return {"ok": True, "state": "logged_in" if logged_in else "idle", "logged_in": logged_in}
+        finally:
+            ctx.close()
 
 
-def serve(port: int, headless: bool, login_port: int = 0) -> None:
-    """HTTP 口。POST /fetch {"url": ...} で HTML を返す。
-
-    login_port > 0 なら、ログイン用の Chromium を VNC で見える形で起動し、
-    /login /login/submit /login/status を生やす。
-    """
+def serve(port: int, headless: bool) -> None:
+    """ブラウザを使う操作を直列化し、ヘルスチェックは独立して応答する。"""
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     token = os.environ.get("NP2R_FULLTEXT_TOKEN", "")
+    profile_lock = Lock()
 
     class H(BaseHTTPRequestHandler):
         def _json(self, code: int, payload: dict) -> None:
@@ -292,12 +253,18 @@ def serve(port: int, headless: bool, login_port: int = 0) -> None:
             return not token or self.headers.get("x-np2reader-token") == token
 
         def do_GET(self):  # noqa: N802
+            path = self.path.rstrip("/")
+            if path == "/health":
+                return self._json(200, {"ok": True})
             if not self._authed():
                 return self._json(401, {"ok": False, "error": "unauthorized"})
-            if self.path.rstrip("/") == "/health":
-                return self._json(200, {"ok": True, **remote_status()})
-            if self.path.rstrip("/") == "/login/status":
-                return self._json(200, remote_status())
+            if path == "/login/status":
+                try:
+                    with profile_lock:
+                        status = remote_status(headless)
+                except Exception:
+                    return self._json(502, {"ok": False, "error": "could not check NewsPicks login"})
+                return self._json(200, status)
             return self._json(404, {"ok": False, "error": "not found"})
 
         def do_POST(self):  # noqa: N802
@@ -307,7 +274,11 @@ def serve(port: int, headless: bool, login_port: int = 0) -> None:
             path = self.path.rstrip("/")
 
             if path == "/login/submit":
-                res = remote_submit(req)
+                try:
+                    with profile_lock:
+                        res = remote_submit(req, headless)
+                except Exception:
+                    return self._json(502, {"ok": False, "error": "NewsPicks login failed"})
                 return self._json(200 if res.get("ok") else 502, res)
 
             if path != "/fetch":
@@ -317,7 +288,8 @@ def serve(port: int, headless: bool, login_port: int = 0) -> None:
             if not re.search(r"newspicks\.com/news/\d+", url):
                 return self._json(400, {"ok": False, "error": "not a NewsPicks article URL"})
             try:
-                res = fetch(url, headless=headless)
+                with profile_lock:
+                    res = fetch(url, headless=headless)
                 code = 200 if res.get("ok") else 502
             except Exception as e:  # noqa: BLE001
                 res, code = {"ok": False, "error": str(e)}, 500
@@ -325,9 +297,6 @@ def serve(port: int, headless: bool, login_port: int = 0) -> None:
 
         def log_message(self, *a):  # 静かに
             pass
-
-    if login_port:
-        remote_start(login_port, headless=False)
 
     ThreadingHTTPServer(("0.0.0.0", port), H).serve_forever()
 
@@ -339,8 +308,6 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--out")
     ap.add_argument("--serve", action="store_true")
     ap.add_argument("--port", type=int, default=8790)
-    ap.add_argument("--login-port", type=int, default=int(os.environ.get("NP2R_LOGIN_CDP_PORT", "0")),
-                    help=">0 ならログイン用ブラウザを起動し VNC で操作できるようにする")
     ap.add_argument("--headless", type=int, default=int(os.environ.get("NP2R_HEADLESS", "1")))
     a = ap.parse_args(argv)
 
@@ -348,7 +315,7 @@ def main(argv: list[str]) -> int:
         login()
         return 0
     if a.serve:
-        serve(a.port, bool(a.headless), a.login_port)
+        serve(a.port, bool(a.headless))
         return 0
     if not a.url:
         ap.print_help()
