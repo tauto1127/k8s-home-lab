@@ -43,7 +43,8 @@
      -H "x-np2reader-token: $NP2R_HOME_TOKEN" -H "content-type: application/json" \
      -d '{"path":"save","url":"https://newspicks.com/news/17906125/"}'
    ```
-   `[fulltext via browser]` が返ればプレミアム本文まで取れている。
+   `[fulltext via browser]` は送信元での全文取得を示す。返された Reader のリンクを開き、記事後半の見出しと本文を確認する。
+   API で確認する場合は Reader の `GET /api/v3/list/?id=<id>&withHtmlContent=true` の `html_content` を参照する。
 
 ## クラスタで踏んだ落とし穴（再発防止メモ）
 
