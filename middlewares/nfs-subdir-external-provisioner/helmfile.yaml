@@ -22,6 +22,9 @@ releases:
       #     archiveOnDelete: false #
           # accessModes: ReadWriteOnce # デフォルト値と同じはず
           pathPattern: "apps/${.PVC.namespace}/${.PVC.name}"
-          archiveOnDelete: false
+          # Keep data when a PVC is deleted: the provisioner renames the directory to archived-<name>.
+          # StorageClass parameters are immutable, so changing this requires deleting the StorageClass
+          # before `helm upgrade` (existing PVs are unaffected). Applied live on 2026-11-21 (revision 2).
+          archiveOnDelete: true
       #     # allowVolumeExpansion: true # デフォルト値と同じはず
       #     # parameters: # class.yaml の parameters に対応

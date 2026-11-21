@@ -80,5 +80,11 @@ kubectl get helmreleases -A
 - `k8scontroller` は、コントロールプレーンと開発マシンを兼ねる小さなVM（2 vCPU / 8 GiB / disk 30 GiB）。
   ディスクが逼迫すると、DiskPressure、etcdの遅延、controllerの一斉再起動が起きる。大きなファイルやキャッシュをここに溜めない。
 - ワークロードは実質 `k8s-worker-node-2` の1台で動いており、PVの大半はNFS（`192.168.11.9`）上にある。
-- StorageClass `nfs-client` は `reclaimPolicy: Delete` かつ `archiveOnDelete: "false"` である。
-  **PVCやnamespaceを削除すると、データも即座に消える。**
+- StorageClass `nfs-client` は `reclaimPolicy: Delete` かつ `archiveOnDelete: "true"`（2026-11-21に変更）。
+  PVCを削除すると、PVは消えるがNFS上のディレクトリは消さずに残す。ただしprovisioner v4.0.2には `pathPattern` のバグがあり、挙動は次のとおり。
+  - `apps/<namespace>/<pvc>` に作られたPV（2025-06以降）: 削除時にNFSルート直下の `<pvc>` を探してしまう。
+    通常は `does not exist, deletion skipped` になり、ディレクトリはその場に残る（自動では掃除されない）。
+  - **NFSルート直下にPVCと同名のディレクトリ（`immich`、`nextcloud`、`upload`、`library`、`data` など）があると、
+    そのディレクトリが `archived-<name>` にrenameされる。** `nfs-client` のPVCにはルート直下と同じ名前を付けない。
+  - 2025-06より前にルート直下 `<namespace>-<pvc>-<pv>` に作られたPVは、正しく `archived-*` に移る。
+  - `archived-*` や残ったディレクトリは、NAS側で手動で掃除する。
