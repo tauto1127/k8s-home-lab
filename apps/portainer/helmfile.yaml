@@ -7,7 +7,7 @@ releases:
     namespace: portainer
     createNamespace: true
     chart: portainer/portainer
-    version: 1.0.62
+    version: 1.0.69
     values:
       - service:
           type: LoadBalancer
