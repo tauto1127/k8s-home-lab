@@ -23,7 +23,7 @@ BLOCKED_ACTIVATION_PATHS = Set.new(["./clusters/home/packages/nextcloud"]).freez
 BLOCKED_ACTIVATION_OBJECTS = Set.new([
   "v1/Namespace//nextcloud",
   "helm.toolkit.fluxcd.io/v2/HelmRelease/nextcloud/nextcloud",
-  "external-secrets.io/v1beta1/ExternalSecret/nextcloud/nextcloud-db-secret"
+  "external-secrets.io/v1/ExternalSecret/nextcloud/nextcloud-db-secret"
 ]).freeze
 MEMOS_PACKAGE_PATH = "./clusters/home/packages/memos"
 N8N_PACKAGE_PATH = "./clusters/home/packages/n8n"
@@ -138,7 +138,7 @@ ESO_CONTROLLER_ACTIVATION_CONTRACT = {
     },
     "chart" => {
       "name" => "external-secrets",
-      "version" => "0.14.4",
+      "version" => "0.20.4",
       "repository" => {
         "apiVersion" => "source.toolkit.fluxcd.io/v1",
         "kind" => "HelmRepository",
@@ -147,12 +147,12 @@ ESO_CONTROLLER_ACTIVATION_CONTRACT = {
         "url" => "https://charts.external-secrets.io"
       },
       "artifact" => {
-        "url" => "https://github.com/external-secrets/external-secrets/releases/download/helm-chart-0.14.4/external-secrets-0.14.4.tgz",
-        "sha256" => "cfda856bdfab922a92c1e0ca199811edae21ad529484f3669b8233e813168779",
+        "url" => "https://github.com/external-secrets/external-secrets/releases/download/helm-chart-0.20.4/external-secrets-0.20.4.tgz",
+        "sha256" => "2d2f5bb4eb8d9cbe1f6d5d9673984c334cb363029498fe328d6c0e60fc47e7ea",
         "crdTemplates" => {
           "pathPrefix" => "external-secrets/templates/crds/",
-          "count" => 19,
-          "sha256" => "5fa17b33c731ab29d089f2bfd350342b002c6758db9ad7f7667c71c809f23ab5"
+          "count" => 23,
+          "sha256" => "51dbe482afd6f8851e6693859e183f79527035615fccf4dacc9b49eb683ed495"
         }
       }
     },
@@ -166,12 +166,20 @@ ESO_CONFIG_ACTIVATION_CONTRACT = {
     "namespace" => "flux-system",
     "name" => "eso-config",
     "path" => "./clusters/home/packages/eso-config",
-    "inventory" => [{
-      "apiVersion" => "external-secrets.io/v1beta1",
-      "kind" => "ClusterSecretStore",
-      "namespace" => "",
-      "name" => "secret-store-provider"
-    }]
+    "inventory" => [
+      {
+        "apiVersion" => "external-secrets.io/v1",
+        "kind" => "ClusterSecretStore",
+        "namespace" => "",
+        "name" => "secret-store-provider"
+      },
+      {
+        "apiVersion" => "external-secrets.io/v1",
+        "kind" => "ClusterSecretStore",
+        "namespace" => "",
+        "name" => "onepassword"
+      }
+    ]
   }],
   "activeHelmReleases" => ESO_CONTROLLER_ACTIVATION_CONTRACT["activeHelmReleases"]
 }.freeze
@@ -299,9 +307,9 @@ CSI_SECRETS_STORE_ACTIVATION_CONTRACT = {
   "activeHelmReleases" => ESO_CONFIG_ACTIVATION_CONTRACT["activeHelmReleases"] + [CSI_SECRETS_STORE_HELM_RELEASE]
 }.freeze
 
-ESO_CONFIG_STORE_IDENTITY = "external-secrets.io/v1beta1/ClusterSecretStore//secret-store-provider"
+ESO_CONFIG_STORE_IDENTITY = "external-secrets.io/v1/ClusterSecretStore//secret-store-provider"
 ESO_CONFIG_STORE_POLICY = {
-  "apiVersion" => "external-secrets.io/v1beta1",
+  "apiVersion" => "external-secrets.io/v1",
   "kind" => "ClusterSecretStore",
   "namespace" => "",
   "name" => "secret-store-provider"
@@ -319,6 +327,27 @@ ESO_CONFIG_STORE_SPEC = {
         }
       },
       "projectID" => "269357193809"
+    }
+  }
+}.freeze
+ESO_CONFIG_ONEPASSWORD_STORE_IDENTITY = "external-secrets.io/v1/ClusterSecretStore//onepassword"
+ESO_CONFIG_ONEPASSWORD_STORE_POLICY = {
+  "apiVersion" => "external-secrets.io/v1",
+  "kind" => "ClusterSecretStore",
+  "namespace" => "",
+  "name" => "onepassword"
+}.freeze
+ESO_CONFIG_ONEPASSWORD_STORE_SPEC = {
+  "provider" => {
+    "onepasswordSDK" => {
+      "vault" => "home-lab",
+      "auth" => {
+        "serviceAccountSecretRef" => {
+          "name" => "onepassword-sa-token",
+          "key" => "token",
+          "namespace" => "external-secrets"
+        }
+      }
     }
   }
 }.freeze
@@ -397,7 +426,10 @@ end
 def active_cluster_secret_store_policies_for_phase(phase)
   return {} unless eso_config_active_phase?(phase)
 
-  {ESO_CONFIG_STORE_IDENTITY => ESO_CONFIG_STORE_POLICY.merge("spec" => ESO_CONFIG_STORE_SPEC)}
+  {
+    ESO_CONFIG_STORE_IDENTITY => ESO_CONFIG_STORE_POLICY.merge("spec" => ESO_CONFIG_STORE_SPEC),
+    ESO_CONFIG_ONEPASSWORD_STORE_IDENTITY => ESO_CONFIG_ONEPASSWORD_STORE_POLICY.merge("spec" => ESO_CONFIG_ONEPASSWORD_STORE_SPEC)
+  }
 end
 
 # Parse the YAML stream without permitting Ruby objects or aliases.

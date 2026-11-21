@@ -1859,7 +1859,7 @@ def test_grafana_preparation_contract
   end
   identities = resources.map { |resource| [resource["apiVersion"], resource["kind"], resource.dig("metadata", "namespace").to_s, resource.dig("metadata", "name")].join("/") }
   assert(identities.sort == [
-    "external-secrets.io/v1beta1/ExternalSecret/grafana/grafana-external-secrets",
+    "external-secrets.io/v1/ExternalSecret/grafana/grafana-external-secrets",
     "helm.toolkit.fluxcd.io/v2/HelmRelease/grafana/grafana-k8s-monitoring",
     "source.toolkit.fluxcd.io/v1/HelmRepository/flux-system/grafana",
     "v1/Namespace//grafana"
