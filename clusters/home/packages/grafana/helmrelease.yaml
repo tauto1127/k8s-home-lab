@@ -3,12 +3,10 @@ kind: HelmRelease
 metadata:
   name: grafana-k8s-monitoring
   namespace: grafana
-  annotations:
-    flux.takutk.com/activation-blocked: "true"
 spec:
   interval: 30m
   timeout: 10m
-  suspend: true
+  suspend: false
   releaseName: grafana-k8s-monitoring
   targetNamespace: grafana
   storageNamespace: grafana

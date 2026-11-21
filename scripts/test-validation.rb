@@ -1823,8 +1823,8 @@ def test_grafana_preparation_contract
   assert(package_kustomization["resources"] == ["namespace.yaml", "helmrepository.yaml", "external-secret.yaml", "helmrelease.yaml"], "Grafana package composition drifted")
 
   helm = YAML.safe_load(File.read(File.join(package_root, "helmrelease.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
-  assert(helm.dig("spec", "suspend") == true, "Grafana HelmRelease must stay suspended at config-active")
-  assert(helm.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "Grafana HelmRelease marker must remain at config-active")
+  assert(helm.dig("spec", "suspend") == false, "Grafana HelmRelease must run at app-active")
+  assert(helm.dig("metadata", "annotations", "flux.takutk.com/activation-blocked").nil?, "Grafana HelmRelease marker must be removed at app-active")
   assert(helm.dig("spec", "install", "crds") == "Skip", "Grafana install.crds must be Skip")
   assert(helm.dig("spec", "upgrade", "crds") == "Skip", "Grafana upgrade.crds must be Skip")
   assert(helm.dig("spec", "chart", "spec", "chart") == "k8s-monitoring", "Grafana chart name drifted")
@@ -1873,8 +1873,8 @@ def test_grafana_preparation_contract
   ].sort, "Grafana package resource inventory drifted")
   assert(resources.none? { |resource| resource["kind"] == "HelmRelease" && resource.dig("metadata", "name") != "grafana-k8s-monitoring" }, "Grafana package must not own alloy child HelmReleases")
   namespace = resources.find { |resource| resource["kind"] == "Namespace" }
-  assert(namespace.dig("metadata", "labels", "flux.takutk.com/activation-blocked").nil?, "Grafana Namespace activation label must be removed at config-active")
-  assert(namespace.dig("metadata", "annotations", "flux.takutk.com/activation-blocked").nil?, "Grafana Namespace activation annotation must be removed at config-active")
+  assert(namespace.dig("metadata", "labels", "flux.takutk.com/activation-blocked").nil?, "Grafana Namespace activation label must stay removed")
+  assert(namespace.dig("metadata", "annotations", "flux.takutk.com/activation-blocked").nil?, "Grafana Namespace activation annotation must stay removed")
   external_secret = resources.find { |resource| resource["kind"] == "ExternalSecret" }
   assert(external_secret.dig("spec", "data").map { |entry| entry["secretKey"] } == ["grafana"], "Grafana ExternalSecret must map the token into Secret key grafana")
 
@@ -1885,9 +1885,9 @@ def test_grafana_preparation_contract
   grafana = sync.find { |resource| resource.dig("metadata", "name") == "grafana" }
   assert(grafana, "Grafana Flux Kustomization is missing")
   assert(grafana.dig("spec", "path") == "./clusters/home/packages/grafana", "Grafana Flux path drifted")
-  assert(grafana.dig("spec", "suspend") == false, "Grafana outer Kustomization must run at config-active")
+  assert(grafana.dig("spec", "suspend") == false, "Grafana outer Kustomization must run at app-active")
   assert(grafana.dig("spec", "prune") == false, "Grafana must keep prune:false")
-  assert(grafana.dig("metadata", "annotations", "flux.takutk.com/activation-blocked").nil?, "Grafana outer Kustomization marker must be removed at config-active")
+  assert(grafana.dig("metadata", "annotations", "flux.takutk.com/activation-blocked").nil?, "Grafana outer Kustomization marker must stay removed")
   assert(grafana.dig("spec", "dependsOn") == [{"name" => "eso-controller"}, {"name" => "eso-config"}], "Grafana must depend on ESO")
 end
 
