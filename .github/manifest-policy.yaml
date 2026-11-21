@@ -73,8 +73,8 @@ jellyfinActivation:
   reason: Jellyfin app activation adopts the existing Helm release after the outer Kustomization and chart contract were verified.
 
 grafanaActivation:
-  stage: preparation
-  reason: Grafana k8s-monitoring preparation keeps the outer Kustomization and inner HelmRelease suspended until credential-backed values are adopted.
+  stage: config-active
+  reason: Grafana config activation reconciles Namespace, HelmRepository, the 1Password-backed ExternalSecret, and a still-suspended HelmRelease. Helm adopt remains a later app-active PR.
 
 fluxActivation:
   phase: csi-secrets-store
@@ -250,6 +250,28 @@ fluxActivation:
           kind: HelmRelease
           namespace: jellyfin
           name: jellyfin
+    - apiVersion: kustomize.toolkit.fluxcd.io/v1
+      kind: Kustomization
+      namespace: flux-system
+      name: grafana
+      path: ./clusters/home/packages/grafana
+      inventory:
+        - apiVersion: v1
+          kind: Namespace
+          namespace: ""
+          name: grafana
+        - apiVersion: source.toolkit.fluxcd.io/v1
+          kind: HelmRepository
+          namespace: flux-system
+          name: grafana
+        - apiVersion: external-secrets.io/v1
+          kind: ExternalSecret
+          namespace: grafana
+          name: grafana-external-secrets
+        - apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          namespace: grafana
+          name: grafana-k8s-monitoring
   activeHelmReleases:
     - apiVersion: helm.toolkit.fluxcd.io/v2
       kind: HelmRelease
@@ -409,6 +431,26 @@ fluxActivation:
           url: https://jellyfin.github.io/jellyfin-helm
       safety:
         activationStage: app-active
+    - apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      namespace: grafana
+      name: grafana-k8s-monitoring
+      owner:
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        namespace: flux-system
+        name: grafana
+      chart:
+        name: k8s-monitoring
+        version: 3.5.3
+        repository:
+          apiVersion: source.toolkit.fluxcd.io/v1
+          kind: HelmRepository
+          namespace: flux-system
+          name: grafana
+          url: https://grafana.github.io/helm-charts
+      safety:
+        activationStage: config-active
 
 fluxBootstrap:
   reason: Pin the zero-Flux installation inputs and keep bootstrap/root ownership distinct from suspended workload packages.
@@ -568,13 +610,6 @@ renderedSecretExceptions:
     allowedKeys:
       - username
     reason: The pinned Grafana chart stores a non-secret connection username beside externally sourced credentials.
-  - sourcePath: clusters/home/packages/grafana/helmrelease.yaml
-    namespace: grafana
-    kind: Secret
-    name: gc-otlp-endpoint-grafana-k8s-monitoring
-    allowedKeys:
-      - username
-    reason: Live OTLP destination is named gc-otlp-endpoint; the chart stores a non-secret connection username beside passwordFrom credentials.
   - sourcePath: middlewares/pg-operator/kustomization.yaml
     namespace: pg-operator
     kind: Secret
