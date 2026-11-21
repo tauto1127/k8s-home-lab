@@ -120,10 +120,14 @@ fluxActivation:
       name: eso-config
       path: ./clusters/home/packages/eso-config
       inventory:
-        - apiVersion: external-secrets.io/v1beta1
+        - apiVersion: external-secrets.io/v1
           kind: ClusterSecretStore
           namespace: ""
           name: secret-store-provider
+        - apiVersion: external-secrets.io/v1
+          kind: ClusterSecretStore
+          namespace: ""
+          name: onepassword
     - apiVersion: kustomize.toolkit.fluxcd.io/v1
       kind: Kustomization
       namespace: flux-system
@@ -162,7 +166,7 @@ fluxActivation:
           kind: Namespace
           namespace: ""
           name: newspicks-to-reader
-        - apiVersion: external-secrets.io/v1beta1
+        - apiVersion: external-secrets.io/v1
           kind: ExternalSecret
           namespace: newspicks-to-reader
           name: newspicks-to-reader-secrets
@@ -258,7 +262,7 @@ fluxActivation:
         name: eso-controller
       chart:
         name: external-secrets
-        version: 0.14.4
+        version: 0.20.4
         repository:
           apiVersion: source.toolkit.fluxcd.io/v1
           kind: HelmRepository
@@ -266,12 +270,12 @@ fluxActivation:
           name: external-secrets
           url: https://charts.external-secrets.io
         artifact:
-          url: https://github.com/external-secrets/external-secrets/releases/download/helm-chart-0.14.4/external-secrets-0.14.4.tgz
-          sha256: cfda856bdfab922a92c1e0ca199811edae21ad529484f3669b8233e813168779
+          url: https://github.com/external-secrets/external-secrets/releases/download/helm-chart-0.20.4/external-secrets-0.20.4.tgz
+          sha256: 2d2f5bb4eb8d9cbe1f6d5d9673984c334cb363029498fe328d6c0e60fc47e7ea
           crdTemplates:
             pathPrefix: external-secrets/templates/crds/
-            count: 19
-            sha256: 5fa17b33c731ab29d089f2bfd350342b002c6758db9ad7f7667c71c809f23ab5
+            count: 23
+            sha256: 51dbe482afd6f8851e6693859e183f79527035615fccf4dacc9b49eb683ed495
       safety:
         installCRDs: true
         bitwardenSdkServerEnabled: true
@@ -488,6 +492,12 @@ allowedMissingSchemas:
     reason: This preparation CI intentionally has no offline schema for the CRD; no operator/server gate is run here.
   - apiVersion: collectors.grafana.com/v1alpha1
     kind: Alloy
+    reason: This preparation CI intentionally has no offline schema for the CRD; no operator/server gate is run here.
+  - apiVersion: external-secrets.io/v1
+    kind: ClusterSecretStore
+    reason: This preparation CI intentionally has no offline schema for the CRD; no operator/server gate is run here.
+  - apiVersion: external-secrets.io/v1
+    kind: ExternalSecret
     reason: This preparation CI intentionally has no offline schema for the CRD; no operator/server gate is run here.
   - apiVersion: external-secrets.io/v1beta1
     kind: ClusterSecretStore
