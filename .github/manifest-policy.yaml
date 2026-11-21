@@ -73,8 +73,8 @@ jellyfinActivation:
   reason: Jellyfin app activation adopts the existing Helm release after the outer Kustomization and chart contract were verified.
 
 grafanaActivation:
-  stage: config-active
-  reason: Grafana config activation reconciles Namespace, HelmRepository, the 1Password-backed ExternalSecret, and a still-suspended HelmRelease. Helm adopt remains a later app-active PR.
+  stage: app-active
+  reason: Grafana app activation adopts the existing parent Helm release after the outer Kustomization and ESO-backed credentials were verified. Alloy child releases stay owned by alloy-operator.
 
 fluxActivation:
   phase: csi-secrets-store
@@ -450,7 +450,7 @@ fluxActivation:
           name: grafana
           url: https://grafana.github.io/helm-charts
       safety:
-        activationStage: config-active
+        activationStage: app-active
 
 fluxBootstrap:
   reason: Pin the zero-Flux installation inputs and keep bootstrap/root ownership distinct from suspended workload packages.
