@@ -2,10 +2,13 @@
 
 ## このPRの範囲
 
-Grafana の **config activation**。外側 `Kustomization/grafana` だけ `suspend: false`。
-merge すると Namespace / HelmRepository / ExternalSecret / 停止中 HelmRelease が reconcile される。
-内側 HelmRelease は `suspend: true` のままなので、Helm upgrade は始まらない。
-クラスタへの手動 apply、`flux resume` はしない。
+Grafana の **app activation**。内側 `HelmRelease/grafana-k8s-monitoring` も `suspend: false` にし、marker を外す。
+merge すると helm-controller が既存の parent release（revision 2）を adopt し、修正済みの values で upgrade する。
+
+- upgrade で chart が作っていた username だけの Secret 7個（`*-grafana-k8s-monitoring`、`alloy-*-remote-cfg-*`）が消える。
+  代わりに Alloy は `grafana-external-secrets` を `remote.kubernetes.secret` で読む。
+- Alloy CR が更新され、alloy-operator が子 release（alloy-logs / metrics / receiver / singleton）を upgrade する。
+- クラスタへの手動 apply、`flux resume` はしない。
 
 ## 認証情報の参照（2026-11-21 修正）
 
@@ -51,10 +54,18 @@ config activation で Git の定義（secretKey `grafana`）に戻る。
 `prune: false` を維持する。CLI resume は使わない。
 
 1. Preparation（完了、#65）: 両方 `suspend: true`
-2. Config activation（このPR）: 外側だけ `suspend: false`、外側 marker と Namespace marker を外す。`grafanaActivation.stage` は `config-active`。
+2. Config activation（完了、#100）: 外側だけ `suspend: false`、外側 marker と Namespace marker を外す。`grafanaActivation.stage` は `config-active`。
    merge 後、`Secret/grafana-external-secrets` のキーが `grafana` になったことをキー名だけで確認する。
-3. App activation（次PR）: 内側 `suspend: false`、内側 marker を外す。`disableTakeOwnership: true` で既存 parent Helm を adopt する。
+3. App activation（このPR）: 内側 `suspend: false`、内側 marker を外す。`disableTakeOwnership: true` で既存 parent Helm を adopt する。
    alloy 4本は Alloy CR 経由で alloy-operator が更新する。Flux には載せない
+
+## merge 後の確認
+
+```sh
+kubectl wait helmrelease/grafana-k8s-monitoring -n grafana --for=condition=Ready --timeout=10m
+kubectl get pods -n grafana   # alloy-* が 2/2 Running
+kubectl logs -n grafana statefulset/grafana-k8s-monitoring-alloy-metrics -c alloy | grep -iE "error|401|remotecfg"
+```
 
 ## ロールバック
 
