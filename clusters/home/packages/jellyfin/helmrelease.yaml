@@ -46,6 +46,10 @@ spec:
         enabled: true
         storageClass: nfs-client
         size: 5Gi
+        annotations:
+          # Keep the NFS PVC when /config switches to jellyfin-config-local, so the
+          # migration init container can copy from it and a rollback can return to it.
+          helm.sh/resource-policy: keep
       media:
         enabled: true
         existingClaim: jellyfin-claim
