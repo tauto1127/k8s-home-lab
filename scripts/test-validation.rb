@@ -1781,8 +1781,15 @@ def test_jellyfin_preparation_contract
   assert(helm.dig("spec", "values", "service", "annotations", "metallb.universe.tf/loadBalancerIPs") == "192.168.11.208", "Jellyfin MetalLB IP drifted")
   assert(helm.dig("spec", "install", "disableTakeOwnership") == true, "Jellyfin adopt flag drifted")
   assert(helm.dig("spec", "values", "persistence", "media", "existingClaim") == "jellyfin-claim", "Jellyfin media claim drifted")
-  assert(helm.dig("spec", "values", "persistence", "config", "storageClass") == "nfs-client", "Jellyfin config storageClass drifted")
-  assert(helm.dig("spec", "values", "persistence", "config", "annotations", "helm.sh/resource-policy") == "keep", "Jellyfin NFS config PVC must be kept for the local-disk migration")
+  assert(helm.dig("spec", "values", "persistence", "config", "existingClaim") == "jellyfin-config-local", "Jellyfin config must use the worker-local claim")
+  assert(helm.dig("spec", "values", "deploymentStrategy", "type") == "Recreate", "Jellyfin must stop the old SQLite writer before starting a new pod")
+  init = Array(helm.dig("spec", "values", "extraInitContainers")).find { |container| container["name"] == "migrate-config-from-nfs" }
+  if init
+    assert(init["image"] == "docker.io/jellyfin/jellyfin:#{helm.dig("spec", "values", "image", "tag")}", "Jellyfin migration init container must reuse the pinned app image")
+    nfs_volume = Array(helm.dig("spec", "values", "volumes")).find { |volume| volume["name"] == "nfs-config" }
+    assert(nfs_volume&.dig("persistentVolumeClaim") == {"claimName" => "jellyfin-config", "readOnly" => true}, "Jellyfin migration must mount the NFS config PVC read-only")
+    assert(init["volumeMounts"].any? { |mount| mount["name"] == "nfs-config" && mount["readOnly"] == true }, "Jellyfin migration must mount the NFS config read-only")
+  end
 
   repo = YAML.safe_load(File.read(File.join(package_root, "helmrepository.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
   assert(repo.dig("spec", "url") == "https://jellyfin.github.io/jellyfin-helm", "Jellyfin HelmRepository URL drifted")

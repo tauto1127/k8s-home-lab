@@ -41,18 +41,45 @@ spec:
       type: LoadBalancer
       annotations:
         metallb.universe.tf/loadBalancerIPs: "192.168.11.208"
+    # One SQLite writer at a time: stop the old pod before the new one starts.
+    deploymentStrategy:
+      type: Recreate
     persistence:
       config:
         enabled: true
-        storageClass: nfs-client
-        size: 5Gi
-        annotations:
-          # Keep the NFS PVC when /config switches to jellyfin-config-local, so the
-          # migration init container can copy from it and a rollback can return to it.
-          helm.sh/resource-policy: keep
+        # Worker-local hostPath volume (config-local.yaml). The Helm-owned NFS PVC
+        # jellyfin-config is no longer rendered and stays because of resource-policy: keep.
+        existingClaim: jellyfin-config-local
       media:
         enabled: true
         existingClaim: jellyfin-claim
+    # One-time copy of /config from the old NFS PVC. Remove after the cutover is verified.
+    volumes:
+      - name: nfs-config
+        persistentVolumeClaim:
+          claimName: jellyfin-config
+          readOnly: true
+    extraInitContainers:
+      - name: migrate-config-from-nfs
+        image: "docker.io/jellyfin/jellyfin:10.11.11@sha256:0b901391a662862eddb5dc55d244d7883cbb6236ef5b9a6ea82abc78a89819f0"
+        command:
+          - sh
+          - -c
+          - |
+            set -eu
+            if [ -f /config/.migrated-from-nfs ]; then
+              echo "already migrated"
+              exit 0
+            fi
+            cp -a /nfs-config/. /config/
+            touch /config/.migrated-from-nfs
+            echo "copied $(du -s /config | cut -f1)K from NFS"
+        volumeMounts:
+          - name: config
+            mountPath: /config
+          - name: nfs-config
+            mountPath: /nfs-config
+            readOnly: true
     livenessProbe:
       failureThreshold: 6
       timeoutSeconds: 30

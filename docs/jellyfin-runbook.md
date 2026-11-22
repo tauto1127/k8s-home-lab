@@ -34,11 +34,11 @@ merge すると Flux が既存 Helm release を adopt し、Helm reconcile が�
 SQLite の WAL はネットワークファイルシステム上では動作保証の対象外なので、`/config` を `k8s-worker-node-2` のローカルディスク
 （hostPath `/var/lib/jellyfin/config`、PV `jellyfin-config-local-pv`、PVC `jellyfin-config-local`）へ移す。
 
-1. 準備（PR-A、停止なし）:
+1. 準備（PR-A #103、停止なし）:
    - 静的 PV/PVC を Flux package に追加する。
    - Helm 所有の `jellyfin-config` PVC に `helm.sh/resource-policy: keep` を付ける。
      Helm は削除の直前に live の PVC の annotation を見るので、切り替えより前のリリースで付けておく必要がある。
-2. 切り替え（PR-B、数分停止）:
+2. 切り替え（PR-B、数分停止。merge 後に init container のログ、`/config/.migrated-from-nfs` の有無、ライブラリとユーザーが見えることを確認する）:
    - `deploymentStrategy: Recreate` にし、`persistence.config.existingClaim: jellyfin-config-local` にする。
    - init container が、旧 PVC（read-only）からローカルへ1回だけ `cp -a` する（marker `/config/.migrated-from-nfs`）。
    - Recreate なので、旧 Pod が止まってからコピーする。
