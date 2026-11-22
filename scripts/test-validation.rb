@@ -1763,7 +1763,7 @@ end
 def test_jellyfin_preparation_contract
   package_root = File.join(ROOT, "clusters/home/packages/jellyfin")
   package_kustomization = YAML.safe_load(File.read(File.join(package_root, "kustomization.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
-  assert(package_kustomization["resources"] == ["namespace.yaml", "helmrepository.yaml", "pvc.yaml", "helmrelease.yaml"], "Jellyfin package composition drifted")
+  assert(package_kustomization["resources"] == ["namespace.yaml", "helmrepository.yaml", "pvc.yaml", "config-local.yaml", "helmrelease.yaml"], "Jellyfin package composition drifted")
 
   helm = YAML.safe_load(File.read(File.join(package_root, "helmrelease.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
   assert(helm.dig("spec", "suspend") == false, "Jellyfin HelmRelease must run at app-active")
@@ -1782,6 +1782,7 @@ def test_jellyfin_preparation_contract
   assert(helm.dig("spec", "install", "disableTakeOwnership") == true, "Jellyfin adopt flag drifted")
   assert(helm.dig("spec", "values", "persistence", "media", "existingClaim") == "jellyfin-claim", "Jellyfin media claim drifted")
   assert(helm.dig("spec", "values", "persistence", "config", "storageClass") == "nfs-client", "Jellyfin config storageClass drifted")
+  assert(helm.dig("spec", "values", "persistence", "config", "annotations", "helm.sh/resource-policy") == "keep", "Jellyfin NFS config PVC must be kept for the local-disk migration")
 
   repo = YAML.safe_load(File.read(File.join(package_root, "helmrepository.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
   assert(repo.dig("spec", "url") == "https://jellyfin.github.io/jellyfin-helm", "Jellyfin HelmRepository URL drifted")
@@ -1794,12 +1795,18 @@ def test_jellyfin_preparation_contract
   identities = resources.map { |resource| [resource["apiVersion"], resource["kind"], resource.dig("metadata", "namespace").to_s, resource.dig("metadata", "name")].join("/") }
   assert(identities == [
     "v1/Namespace//jellyfin",
+    "v1/PersistentVolume//jellyfin-config-local-pv",
     "v1/PersistentVolume//jellyfin-pv",
     "v1/PersistentVolumeClaim/jellyfin/jellyfin-claim",
+    "v1/PersistentVolumeClaim/jellyfin/jellyfin-config-local",
     "helm.toolkit.fluxcd.io/v2/HelmRelease/jellyfin/jellyfin",
     "source.toolkit.fluxcd.io/v1/HelmRepository/flux-system/jellyfin"
   ], "Jellyfin package resource inventory drifted")
   assert(resources.none? { |resource| resource.dig("metadata", "name") == "jellyfin-config" }, "Helm-owned jellyfin-config PVC must not be in the Flux package")
+  local_pv = resources.find { |resource| resource["kind"] == "PersistentVolume" && resource.dig("metadata", "name") == "jellyfin-config-local-pv" }
+  assert(local_pv.dig("spec", "persistentVolumeReclaimPolicy") == "Retain", "Jellyfin local config PV must be Retain")
+  assert(local_pv.dig("spec", "hostPath", "path") == "/var/lib/jellyfin/config", "Jellyfin local config hostPath drifted")
+  assert(local_pv.dig("spec", "nodeAffinity", "required", "nodeSelectorTerms", 0, "matchExpressions", 0, "values") == ["k8s-worker-node-2"], "Jellyfin local config PV must be pinned to the worker")
   namespace = resources.find { |resource| resource["kind"] == "Namespace" }
   assert(namespace.dig("metadata", "labels", "flux.takutk.com/activation-blocked").nil?, "Jellyfin Namespace activation label must be removed at config-active")
   assert(namespace.dig("metadata", "annotations", "flux.takutk.com/activation-blocked").nil?, "Jellyfin Namespace activation annotation must be removed at config-active")

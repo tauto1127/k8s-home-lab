@@ -243,9 +243,17 @@ fluxActivation:
           namespace: ""
           name: jellyfin-pv
         - apiVersion: v1
+          kind: PersistentVolume
+          namespace: ""
+          name: jellyfin-config-local-pv
+        - apiVersion: v1
           kind: PersistentVolumeClaim
           namespace: jellyfin
           name: jellyfin-claim
+        - apiVersion: v1
+          kind: PersistentVolumeClaim
+          namespace: jellyfin
+          name: jellyfin-config-local
         - apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease
           namespace: jellyfin
