@@ -1823,8 +1823,8 @@ def test_grafana_preparation_contract
   assert(package_kustomization["resources"] == ["namespace.yaml", "helmrepository.yaml", "external-secret.yaml", "helmrelease.yaml"], "Grafana package composition drifted")
 
   helm = YAML.safe_load(File.read(File.join(package_root, "helmrelease.yaml")), permitted_classes: [], permitted_symbols: [], aliases: false)
-  assert(helm.dig("spec", "suspend") == true, "Grafana HelmRelease must stay suspended at preparation")
-  assert(helm.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "Grafana HelmRelease marker must remain at preparation")
+  assert(helm.dig("spec", "suspend") == true, "Grafana HelmRelease must stay suspended at config-active")
+  assert(helm.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "Grafana HelmRelease marker must remain at config-active")
   assert(helm.dig("spec", "install", "crds") == "Skip", "Grafana install.crds must be Skip")
   assert(helm.dig("spec", "upgrade", "crds") == "Skip", "Grafana upgrade.crds must be Skip")
   assert(helm.dig("spec", "chart", "spec", "chart") == "k8s-monitoring", "Grafana chart name drifted")
@@ -1837,15 +1837,22 @@ def test_grafana_preparation_contract
   assert(helm.dig("spec", "releaseName") == "grafana-k8s-monitoring", "Grafana releaseName drifted")
   destinations = helm.dig("spec", "values", "destinations")
   assert(destinations.is_a?(Array) && destinations.map { |destination| destination["name"] } == ["grafana-cloud-metrics", "grafana-cloud-logs", "gc-otlp-endpoint"], "Grafana destination names drifted")
+  external_secret_ref = {"create" => false, "name" => "grafana-external-secrets", "namespace" => "grafana"}
   destinations.each do |destination|
-    assert(destination.dig("auth", "passwordFrom") == "grafana-external-secrets", "Grafana destination must use passwordFrom")
+    assert(destination["secret"] == external_secret_ref, "Grafana destination #{destination["name"]} must read the ESO-managed Secret")
     assert(destination.dig("auth", "passwordKey") == "grafana", "Grafana destination passwordKey drifted")
+    assert(!destination.dig("auth").key?("passwordFrom"), "Grafana destination passwordFrom is a raw Alloy expression, not a Secret name")
     assert(!destination.dig("auth").key?("password"), "Grafana destination must not store password literals")
+    assert(destination.dig("auth", "usernameFrom").to_s.match?(/\A"\d+"\z/), "Grafana destination username must be a raw Alloy string literal")
   end
   %w[alloy-metrics alloy-singleton alloy-logs alloy-receiver].each do |collector|
-    auth = helm.dig("spec", "values", collector, "remoteConfig", "auth")
-    assert(auth.is_a?(Hash) && auth["passwordFrom"] == "grafana-external-secrets", "Grafana #{collector} remoteConfig must use passwordFrom")
+    remote_config = helm.dig("spec", "values", collector, "remoteConfig")
+    auth = remote_config.is_a?(Hash) ? remote_config["auth"] : nil
+    assert(remote_config["secret"] == external_secret_ref, "Grafana #{collector} remoteConfig must read the ESO-managed Secret")
+    assert(auth.is_a?(Hash) && auth["passwordKey"] == "grafana" && !auth.key?("passwordFrom"), "Grafana #{collector} remoteConfig must use passwordKey grafana")
     assert(!auth.key?("password"), "Grafana #{collector} remoteConfig must not store password literals")
+    api_key_env = Array(helm.dig("spec", "values", collector, "alloy", "extraEnv")).find { |env| env["name"] == "GCLOUD_RW_API_KEY" }
+    assert(api_key_env&.dig("valueFrom", "secretKeyRef") == {"name" => "grafana-external-secrets", "key" => "grafana"}, "Grafana #{collector} GCLOUD_RW_API_KEY must come from the ESO-managed Secret")
   end
   assert(helm.dig("spec", "install", "disableTakeOwnership") == true, "Grafana adopt flag drifted")
 
@@ -1866,8 +1873,10 @@ def test_grafana_preparation_contract
   ].sort, "Grafana package resource inventory drifted")
   assert(resources.none? { |resource| resource["kind"] == "HelmRelease" && resource.dig("metadata", "name") != "grafana-k8s-monitoring" }, "Grafana package must not own alloy child HelmReleases")
   namespace = resources.find { |resource| resource["kind"] == "Namespace" }
-  assert(namespace.dig("metadata", "labels", "flux.takutk.com/activation-blocked") == "true", "Grafana Namespace activation label must remain at preparation")
-  assert(namespace.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "Grafana Namespace activation annotation must remain at preparation")
+  assert(namespace.dig("metadata", "labels", "flux.takutk.com/activation-blocked").nil?, "Grafana Namespace activation label must be removed at config-active")
+  assert(namespace.dig("metadata", "annotations", "flux.takutk.com/activation-blocked").nil?, "Grafana Namespace activation annotation must be removed at config-active")
+  external_secret = resources.find { |resource| resource["kind"] == "ExternalSecret" }
+  assert(external_secret.dig("spec", "data").map { |entry| entry["secretKey"] } == ["grafana"], "Grafana ExternalSecret must map the token into Secret key grafana")
 
   sync = File.read(File.join(ROOT, "clusters/home/flux-system/sync.yaml")).split(/^---[ \t]*(?:#.*)?$\n?/).filter_map do |document|
     next if document.strip.empty?
@@ -1876,9 +1885,9 @@ def test_grafana_preparation_contract
   grafana = sync.find { |resource| resource.dig("metadata", "name") == "grafana" }
   assert(grafana, "Grafana Flux Kustomization is missing")
   assert(grafana.dig("spec", "path") == "./clusters/home/packages/grafana", "Grafana Flux path drifted")
-  assert(grafana.dig("spec", "suspend") == true, "Grafana outer Kustomization must stay suspended at preparation")
+  assert(grafana.dig("spec", "suspend") == false, "Grafana outer Kustomization must run at config-active")
   assert(grafana.dig("spec", "prune") == false, "Grafana must keep prune:false")
-  assert(grafana.dig("metadata", "annotations", "flux.takutk.com/activation-blocked") == "true", "Grafana outer Kustomization marker must remain at preparation")
+  assert(grafana.dig("metadata", "annotations", "flux.takutk.com/activation-blocked").nil?, "Grafana outer Kustomization marker must be removed at config-active")
   assert(grafana.dig("spec", "dependsOn") == [{"name" => "eso-controller"}, {"name" => "eso-config"}], "Grafana must depend on ESO")
 end
 

@@ -2,8 +2,32 @@
 
 ## このPRの範囲
 
-Grafana の **preparation**。外側 Kustomization と内側 HelmRelease は両方 `suspend: true`。
-merge しても Flux は起動しない。クラスタへの手動 apply、`flux resume`、手動 reconcile はしない。
+Grafana の **config activation**。外側 `Kustomization/grafana` だけ `suspend: false`。
+merge すると Namespace / HelmRepository / ExternalSecret / 停止中 HelmRelease が reconcile される。
+内側 HelmRelease は `suspend: true` のままなので、Helm upgrade は始まらない。
+クラスタへの手動 apply、`flux resume` はしない。
+
+## 認証情報の参照（2026-11-21 修正）
+
+revision 2（2026-09-11）で values を `passwordFrom: grafana-external-secrets` に変えたため、監視が止まっていた。
+
+- k8s-monitoring v3 の `passwordFrom` は Secret 名ではなく、Alloy の式をそのまま書くフィールド。
+  `password = grafana-external-secrets` という不正な Alloy 設定になる。
+- chart が作る `*-grafana-k8s-monitoring` / `alloy-*-remote-cfg-*` の Secret から `password` キーが消えた。
+  `extraEnv` の `GCLOUD_RW_API_KEY` が `key: password` を参照していたため、
+  Alloy の4 Pod が `CreateContainerConfigError` で起動できなくなった。
+
+正しい書き方は、chart の external secret モードを使うこと。
+
+- 各 destination と `alloy-*.remoteConfig` に `secret: {create: false, name: grafana-external-secrets, namespace: grafana}`
+  と `auth.passwordKey: grafana` を指定する。
+- external モードでは username も Secret から読もうとするので、`auth.usernameFrom: '"<id>"'`（Alloy の文字列リテラル）で渡す。
+- `GCLOUD_RW_API_KEY` は `grafana-external-secrets` の `grafana` キーから取る。
+- 1Password `grafana/password` の token が4つの endpoint（metrics / logs / OTLP / Fleet）すべてで認証に通ることを確認済み（2026-11-21）。
+  不正な token はすべて 401 になることも確かめた。
+
+live の ExternalSecret は、ローカルで手動 apply された secretKey `grafana-external-secrets` の定義になっていた。
+config activation で Git の定義（secretKey `grafana`）に戻る。
 
 ## 構成（ライブ照合 2026-09-11）
 
@@ -26,9 +50,11 @@ merge しても Flux は起動しない。クラスタへの手動 apply、`flux
 
 `prune: false` を維持する。CLI resume は使わない。
 
-1. Preparation（このPR）: 両方 `suspend: true`
-2. Config activation（次PR）: 外側だけ `suspend: false`。Namespace / HelmRepository / ExternalSecret / 停止中 HelmRelease
-3. App activation: 内側 `suspend: false`。`disableTakeOwnership: true` で既存 parent Helm を adopt する。alloy 4本は作らない
+1. Preparation（完了、#65）: 両方 `suspend: true`
+2. Config activation（このPR）: 外側だけ `suspend: false`、外側 marker と Namespace marker を外す。`grafanaActivation.stage` は `config-active`。
+   merge 後、`Secret/grafana-external-secrets` のキーが `grafana` になったことをキー名だけで確認する。
+3. App activation（次PR）: 内側 `suspend: false`、内側 marker を外す。`disableTakeOwnership: true` で既存 parent Helm を adopt する。
+   alloy 4本は Alloy CR 経由で alloy-operator が更新する。Flux には載せない
 
 ## ロールバック
 
